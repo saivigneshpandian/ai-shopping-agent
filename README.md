@@ -1,6 +1,6 @@
 # 🛒 AI Shopping Agent — Multimodal, Tool-Calling
 
-A conversational shopping assistant built with **LangChain** that searches a product catalog, checks customer ratings, places orders, and can even **identify a product from a photo** using vision.
+A conversational shopping assistant built with **LangChain** that searches a product catalog, checks customer ratings, manages a cart, places orders, and can even **identify a product from a photo** using vision.
 
 Unlike a simple Q&A bot, this is an **agent that acts** — it decides which tools to call, chains them together, and writes real orders to a database.
 
@@ -11,7 +11,9 @@ Unlike a simple Q&A bot, this is an **agent that acts** — it decides which too
 - **Browse by description** — "show me organic snacks under $10"
 - **Filter by rating** — the agent pulls each product's average rating and filters accordingly
 - **Search by image** — upload a product photo; a vision model identifies it and feeds the attributes into search
+- **Add to cart** — build up a multi-item cart before checking out
 - **Place orders** — confirm with "yes" or "order #2" and the agent writes the order to the database
+- **Remembers the conversation** — session-scoped memory, so "order the first one" resolves against what it just showed you
 
 ---
 
@@ -22,10 +24,10 @@ User input (text or image)
         ↓
     LangChain Agent  ──→ decides which tool to call
         ↓
-┌───────────────┬──────────────┬────────────┬────────────────────────┐
-│ search_products│  get_rating  │  checkout  │ describe_product_image │
-│  (SQL query)   │ (reviews API)│ (writes DB)│   (Gemini vision)      │
-└───────────────┴──────────────┴────────────┴────────────────────────┘
+┌────────────────┬────────────┬─────────────┬──────────┬───────────────────────┐
+│ search_products│ get_rating │ add_to_cart │ checkout │ describe_product_image│
+│  (SQL query)   │(reviews API)│ (cart table)│(writes DB)│    (Gemini vision)   │
+└────────────────┴────────────┴─────────────┴──────────┴───────────────────────┘
         ↓
    Grounded response → order confirmation
 ```
@@ -36,6 +38,7 @@ User input (text or image)
 |---|---|
 | `search_products` | Queries the SQLite catalog by keyword, with optional price and organic filters |
 | `get_rating` | Returns average rating and review count for a product |
+| `add_to_cart` | Adds a product to a session-scoped cart, so multiple items can be collected before ordering |
 | `checkout` | Places an order — writes to the `orders` table and returns a confirmation |
 | `describe_product_image` | Sends an image to Gemini vision, returns product attributes for search |
 
@@ -43,6 +46,10 @@ User input (text or image)
 
 - **Groq (Llama 3.1)** — agent reasoning and tool selection
 - **Google Gemini 2.5 Flash** — image understanding
+
+### Memory
+
+Conversation history is wired through `RunnableWithMessageHistory` with per-session stores, so the agent keeps context across turns. Each Streamlit session gets its own `session_id`, which also scopes the cart.
 
 ---
 
@@ -112,7 +119,8 @@ A few things I learned building this:
 
 ## Roadmap
 
+- [x] Multi-item cart instead of single-product checkout
+- [x] Conversation memory across turns
 - [ ] Add order history and cancellation tools
-- [ ] Multi-item cart instead of single-product checkout
-- [ ] Persistent conversation memory across sessions
+- [ ] Persist memory across sessions (currently in-memory per session)
 - [ ] Swap orchestration to LangGraph for finer control over agent state
