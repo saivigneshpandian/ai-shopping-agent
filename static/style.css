@@ -324,3 +324,6 @@ legend small { color: var(--ink-soft); font-weight: 400; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* product results use the full chat width so cards sit side by side */
+.msg.assistant .bubble:has(.products) { width: min(760px, 100%); max-width: 100%; }

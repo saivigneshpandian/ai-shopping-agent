@@ -22,7 +22,7 @@ import db
 import payments
 from reviews_api import get_product_rating
 
-load_dotenv()
+load_dotenv(override=True)  # .env wins over old Windows env vars
 db.init_db()
 
 SYSTEM_PROMPT = """
@@ -78,7 +78,7 @@ def _vision_llm():
 def _chat_llm():
     from langchain_groq import ChatGroq
 
-    return ChatGroq(model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"), temperature=0)
+    return ChatGroq(model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"), temperature=0)
 
 
 def build_tools(session_id: str):

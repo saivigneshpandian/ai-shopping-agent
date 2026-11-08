@@ -12,7 +12,7 @@ import uuid
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)  # .env wins over old Windows env vars
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402

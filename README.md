@@ -37,7 +37,7 @@ Even if the model falls for it, the guardrail blocks the $229.90 order. **Safety
 User (chat / photo)
       │
       ▼
-LangChain agent (Groq Llama 3.3 70B)  ── Gemini 2.5 Flash for product photos
+LangChain agent (Groq GPT-OSS 120B)  ── Gemini 2.5 Flash for product photos
       │ tool calls
       ▼
 ┌───────────────────────────────────────────────┐
@@ -70,7 +70,7 @@ Pending (not yet approved) orders also count against the budget, so the agent ca
 orders at once to slip past the cap.
 
 ### AI tools used
-- **Groq, Llama 3.3 70B**: agent reasoning and tool calling
+- **Groq, GPT-OSS 120B**: agent reasoning and tool calling
 - **Google Gemini 2.5 Flash**: identifies products from photos
 - **LangChain / LangGraph**: agent runtime + conversation memory
 
