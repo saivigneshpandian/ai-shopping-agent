@@ -14,11 +14,12 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)  # .env wins over old Windows env vars
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
-from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
+import auth  # noqa: E402
 import db  # noqa: E402
 import payments  # noqa: E402
 from paypal_client import get_client  # noqa: E402
@@ -29,7 +30,18 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "_uploads")
 SID_RE = re.compile(r"^s-[a-f0-9]{10}$")
 
 db.init_db()
+auth.init()
 app = FastAPI(title="AgentPay Guard")
+
+
+@app.middleware("http")
+async def load_user(request: Request, call_next):
+    """Attach the logged-in user (from the HttpOnly cookie) to this request."""
+    tok = auth.current_user.set(auth.user_from_token(request.cookies.get(auth.COOKIE)))
+    try:
+        return await call_next(request)
+    finally:
+        auth.current_user.reset(tok)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _agents = {}
@@ -38,8 +50,12 @@ _agents_lock = threading.Lock()
 
 
 def _check_sid(sid):
-    if not SID_RE.match(sid or ""):
-        raise HTTPException(400, "bad session id")
+    """Every session belongs to one logged-in user; nobody can read or spend another user's."""
+    user = auth.current_user.get()
+    if not user:
+        raise HTTPException(401, "please log in")
+    if not SID_RE.match(sid or "") or not auth.owns_session(user["id"], sid):
+        raise HTTPException(403, "not your session")
     return sid
 
 
@@ -153,9 +169,61 @@ def vault_cancel(sid: str):
 
 # ---------------- API ----------------
 
+# ---------------- accounts ----------------
+
+class SignupIn(BaseModel):
+    name: str = Field(max_length=60)
+    email: str = Field(max_length=120)
+    password: str = Field(max_length=200)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(max_length=120)
+    password: str = Field(max_length=200)
+
+
+def _auth_response(token):
+    res = JSONResponse({"ok": True})
+    res.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14,
+                   secure=get_client().app_url.startswith("https://"))
+    return res
+
+
+@app.post("/api/auth/signup")
+def signup(body: SignupIn):
+    token, err = auth.signup(body.name, body.email, body.password)
+    if err:
+        raise HTTPException(400, err)
+    return _auth_response(token)
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn):
+    token, err = auth.login(body.email, body.password)
+    if err:
+        raise HTTPException(401, err)
+    return _auth_response(token)
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request):
+    auth.logout(request.cookies.get(auth.COOKIE))
+    res = JSONResponse({"ok": True})
+    res.delete_cookie(auth.COOKIE)
+    return res
+
+
+@app.get("/api/auth/me")
+def me():
+    user = auth.current_user.get()
+    if not user:
+        raise HTTPException(401, "please log in")
+    return {"name": user["name"], "email": user["email"], "session_id": user["active_session"]}
+
+
 @app.get("/api/session")
-def new_session():
-    return {"session_id": "s-" + uuid.uuid4().hex[:10]}
+def current_session():
+    return {"session_id": me()["session_id"]}
 
 
 @app.get("/api/state")
@@ -333,6 +401,6 @@ def vault_disconnect(body: PaymentAction):
 
 @app.post("/api/reset")
 def reset(body: PaymentAction):
-    """Fresh demo: a brand-new session (old data stays in the DB)."""
+    """Fresh demo for this user: new budget, chat and wallet (old data stays in the DB)."""
     _check_sid(body.session_id)
-    return new_session()
+    return {"session_id": auth.new_session_for(auth.current_user.get()["id"])}

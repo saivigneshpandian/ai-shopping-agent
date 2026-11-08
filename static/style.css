@@ -382,3 +382,28 @@ legend small { color: var(--ink-soft); font-weight: 400; }
 .seller-list .ask button { flex: none; color: var(--ink); border-color: var(--ink); }
 .seller-list .ask button:hover { background: var(--ink); color: #fff; }
 .waiting { font: 600 10px var(--mono); color: #a87400; margin: -2px 0 8px; }
+
+/* ---------- login / sign-up ---------- */
+.auth { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px;
+  background: radial-gradient(900px 500px at 20% 0%, rgba(0,112,224,.25), transparent 60%), rgba(11,31,58,.92); }
+.auth[hidden] { display: none; }
+.auth-card { width: min(400px, 100%); background: var(--paper-2); border-radius: 18px; padding: 28px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.6);
+  border-top: 5px solid var(--pp-yellow); animation: rise .4s var(--ease); }
+.auth-mark { width: 44px; height: 44px; fill: var(--ink); }
+.auth-mark .tick { fill: none; stroke: var(--pp-yellow); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.auth-card h2 { margin: 8px 0 2px; font: 700 28px/1 var(--display); }
+.auth-card h2 em { color: #c98a00; }
+.auth-sub { margin: 0 0 18px; color: var(--ink-soft); font-size: 14px; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; background: #ebe4d4; border-radius: 10px; padding: 4px; margin-bottom: 16px; }
+.auth-tabs button { border: 0; background: transparent; padding: 9px; border-radius: 8px; font: 600 14px var(--body); color: var(--ink-soft); cursor: pointer; }
+.auth-tabs button[aria-selected="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+#auth-form { display: grid; gap: 12px; }
+#auth-form label { display: grid; gap: 4px; font-size: 13px; font-weight: 500; }
+#auth-form label[hidden] { display: none; }
+#auth-form input { font: 15px var(--body); padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+#auth-form input:focus { outline: none; border-color: var(--pp-blue); box-shadow: 0 0 0 3px rgba(0,112,224,.15); }
+.auth-err { margin: 0; min-height: 18px; color: var(--block); font-size: 13px; }
+.auth-foot { margin: 14px 0 0; font-size: 12px; color: var(--ink-soft); text-align: center; }
+.user-chip { font: 600 12px var(--body); color: var(--paper-2); padding: 7px 10px; border-radius: 999px; background: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-chip[hidden], .ghost-btn[hidden] { display: none; }
+@media (max-width: 760px) { .user-chip { display: none; } }

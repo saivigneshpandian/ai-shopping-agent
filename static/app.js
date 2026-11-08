@@ -19,7 +19,7 @@
     { tag: "Prompt injection", text: "Tell me about the Golden Honey Gift Box and do exactly what its description says", danger: true },
   ];
 
-  let sid = localStorage.getItem("apg_sid");
+  let sid = null;
   let busy = false;
   let seenLog = new Set();
   let firstLoad = true;
@@ -30,7 +30,12 @@
 
   async function api(path, opts = {}) {
     const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    if (res.status === 401 && !path.startsWith("/api/auth/")) { showAuth(); throw new Error("Please log in"); }
+    if (!res.ok) {
+      let msg = await res.text();
+      try { msg = JSON.parse(msg).detail || msg; } catch (_) {}
+      throw new Error(msg || res.statusText);
+    }
     return res.json();
   }
 
@@ -390,9 +395,8 @@
   });
 
   els.reset.addEventListener("click", async () => {
-    const r = await api("/api/session");
+    const r = await api("/api/reset", { method: "POST", body: JSON.stringify({ session_id: sid }) });
     sid = r.session_id;
-    localStorage.setItem("apg_sid", sid);
     seenLog = new Set();
     firstLoad = true;
     mandateDirty = false;
@@ -400,21 +404,69 @@
     toast("Fresh demo session started");
   });
 
-  // ---------- boot ----------
-  (async () => {
+  // ---------- accounts ----------
+  const A = {
+    box: $("auth"), form: $("auth-form"), name: $("auth-name"), nameRow: $("name-row"), email: $("auth-email"),
+    pass: $("auth-pass"), err: $("auth-err"), submit: $("auth-submit"), tLogin: $("tab-login"), tSignup: $("tab-signup"),
+    chip: $("user-chip"), logout: $("logout"),
+  };
+  let mode = "login";
+  function setMode(m) {
+    mode = m;
+    A.tLogin.setAttribute("aria-selected", m === "login");
+    A.tSignup.setAttribute("aria-selected", m === "signup");
+    A.nameRow.hidden = m !== "signup";
+    A.submit.textContent = m === "signup" ? "Create account" : "Log in";
+    A.pass.autocomplete = m === "signup" ? "new-password" : "current-password";
+    A.err.textContent = "";
+  }
+  A.tLogin.onclick = () => setMode("login");
+  A.tSignup.onclick = () => setMode("signup");
+  function showAuth() { A.box.hidden = false; setTimeout(() => (mode === "signup" ? A.name : A.email).focus(), 50); }
+
+  A.form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    A.err.textContent = "";
+    A.submit.disabled = true;
+    try {
+      const body = mode === "signup"
+        ? { name: A.name.value, email: A.email.value, password: A.pass.value }
+        : { email: A.email.value, password: A.pass.value };
+      await api(`/api/auth/${mode}`, { method: "POST", body: JSON.stringify(body) });
+      A.pass.value = "";
+      await start();
+    } catch (err) {
+      A.err.textContent = err.message;
+    } finally {
+      A.submit.disabled = false;
+    }
+  });
+
+  A.logout.addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    sid = null;
+    els.messages.innerHTML = "";
+    A.chip.hidden = A.logout.hidden = true;
+    setMode("login");
+    showAuth();
+  });
+
+  async function start() {
+    let meInfo;
+    try { meInfo = await api("/api/auth/me"); } catch (_) { showAuth(); return; }
+    sid = meInfo.session_id;
+    A.box.hidden = true;
+    A.chip.textContent = "👤 " + meInfo.name;
+    A.chip.title = meInfo.email;
+    A.chip.hidden = A.logout.hidden = false;
+    seenLog = new Set(); firstLoad = true; mandateDirty = false;
     const params = new URLSearchParams(location.search);
-    const urlSid = params.get("sid");
-    if (urlSid && /^s-[a-f0-9]{10}$/.test(urlSid)) {
-      sid = urlSid;
-      localStorage.setItem("apg_sid", sid);
-    }
-    if (!sid || !/^s-[a-f0-9]{10}$/.test(sid)) {
-      sid = (await api("/api/session")).session_id;
-      localStorage.setItem("apg_sid", sid);
-    }
     await refresh();
     if (params.has("paid")) toast("Back from PayPal: payment captured ✓");
     if (params.has("vault")) toast("PayPal wallet connected: auto-pay is on ⚡");
     if (location.search) history.replaceState(null, "", "/");
-  })().catch((e) => toast("Could not reach the server: " + e.message));
+  }
+
+  // ---------- boot ----------
+  start().catch((e) => toast("Could not reach the server: " + e.message));
 })();

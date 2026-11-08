@@ -23,6 +23,7 @@ AgentPay Guard puts a **spending mandate** between the AI agent and PayPal:
 - The buyer approves on PayPal, the order is captured, and the budget updates
 - Refunds are **requests, not instant**: the AI files the buyer's claim **with a required photo**, the **seller** reviews the photo (and can ask the buyer follow-up questions, saved in the DB), and only an approval triggers a PayPal refund (which restores the budget)
 - Every allow/block decision is shown in a live **guardrail log**
+- **Accounts:** sign up / log in (salted PBKDF2 hashes, HttpOnly cookie). Each user's mandate, PayPal wallet, chat and payments are private, and every API checks ownership
 
 ### Prompt-injection proof
 
@@ -58,6 +59,7 @@ PayPal Orders v2 (create → buyer approves → capture)  ·  Payments v2 (refun
 | `payments.py` | **Mandate guardrail** + checkout / confirm / refund service |
 | `paypal_client.py` | PayPal REST client: OAuth, create order, capture, refund (+ offline mock mode) |
 | `db.py` | SQLite: products, reviews, cart, mandates, payments, guardrail log |
+| `auth.py` | Sign-up / login, password hashing, session ownership checks |
 | `server.py` | FastAPI backend: chat, state, mandate, PayPal return/cancel routes |
 | `static/` | Custom web UI (vanilla HTML/CSS/JS): chat with product cards, mandate gauge, receipt-style guardrail log |
 

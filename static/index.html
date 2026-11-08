@@ -14,6 +14,27 @@
 <body>
   <a class="skip" href="#composer-input">Skip to chat</a>
 
+  <!-- Login / sign-up -->
+  <div class="auth" id="auth" hidden>
+    <div class="auth-card" role="dialog" aria-labelledby="auth-h">
+      <svg class="auth-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 4 7v8c0 7.5 5.1 13.4 12 15 6.9-1.6 12-7.5 12-15V7z"/><path class="tick" d="m11 16 4 4 7-8"/></svg>
+      <h2 id="auth-h">AgentPay <em>Guard</em></h2>
+      <p class="auth-sub">Give your AI a budget, not your wallet.</p>
+      <div class="auth-tabs" role="tablist">
+        <button type="button" role="tab" id="tab-login" aria-selected="true">Log in</button>
+        <button type="button" role="tab" id="tab-signup" aria-selected="false">Sign up</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <label id="name-row" hidden>Your name<input id="auth-name" autocomplete="name" maxlength="60"></label>
+        <label>Email<input id="auth-email" type="email" autocomplete="email" maxlength="120" required></label>
+        <label>Password<input id="auth-pass" type="password" autocomplete="current-password" minlength="8" maxlength="200" required></label>
+        <p class="auth-err" id="auth-err" role="alert"></p>
+        <button type="submit" class="solid-btn" id="auth-submit">Log in</button>
+      </form>
+      <p class="auth-foot">Your spending mandate, PayPal wallet and orders are private to your account.</p>
+    </div>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 4 7v8c0 7.5 5.1 13.4 12 15 6.9-1.6 12-7.5 12-15V7z"/><path class="tick" d="m11 16 4 4 7-8"/></svg>
@@ -24,7 +45,9 @@
     </div>
     <div class="topbar-right">
       <span class="mode-chip" id="mode-chip">PayPal</span>
+      <span class="user-chip" id="user-chip" hidden></span>
       <button class="ghost-btn" id="new-session" type="button">New demo</button>
+      <button class="ghost-btn" id="logout" type="button" hidden>Log out</button>
     </div>
   </header>
 
