@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 import auth  # noqa: E402
 import db  # noqa: E402
 import payments  # noqa: E402
+import security_tests  # noqa: E402
 from paypal_client import get_client  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -132,6 +133,20 @@ def paypal_cancel(token: str = ""):
     return RedirectResponse("/", status_code=303)
 
 
+@app.post("/paypal/webhook")
+async def paypal_webhook(request: Request):
+    """PayPal event notifications. Only signature-verified events can change payment state."""
+    try:
+        event = await request.json()
+    except Exception:
+        raise HTTPException(400, "bad json")
+    from starlette.concurrency import run_in_threadpool
+    ok, msg = await run_in_threadpool(payments.handle_webhook, dict(request.headers), event)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "result": msg}
+
+
 @app.get("/api/vault/connect")
 def vault_connect(session_id: str):
     sid = _check_sid(session_id)
@@ -213,12 +228,21 @@ def logout(request: Request):
     return res
 
 
+@app.post("/api/auth/demo")
+def demo_login():
+    """'Try the demo': a private demo account in one click (security tests are only shown here)."""
+    if os.environ.get("DEMO_ENABLED", "true").lower() == "false":
+        raise HTTPException(404, "demo disabled")
+    return _auth_response(auth.create_demo_user())
+
+
 @app.get("/api/auth/me")
 def me():
     user = auth.current_user.get()
     if not user:
         raise HTTPException(401, "please log in")
-    return {"name": user["name"], "email": user["email"], "session_id": user["active_session"]}
+    return {"name": user["name"], "email": user["email"], "session_id": user["active_session"],
+            "is_demo": bool(user.get("is_demo"))}
 
 
 @app.get("/api/session")
@@ -236,6 +260,8 @@ def state(session_id: str):
         "mode": "mock" if get_client().is_mock else get_client().mode,
         "mandate": m,
         "spent": spent,
+        "spent_today": db.spent_today(sid),
+        "policy_version": payments.POLICY_VERSION,
         "remaining": round(m["total_budget"] - spent, 2),
         "categories": db.list_categories(),
         "cart": cart,
@@ -310,17 +336,22 @@ class MandateIn(BaseModel):
     total_budget: float = Field(ge=0, le=100000)
     max_per_order: float = Field(ge=0, le=100000)
     autopay_limit: float = Field(default=0, ge=0, le=100000)
+    daily_limit: float = Field(default=40, ge=0, le=100000)
     allowed_categories: list[str] = []
+    blocked_categories: list[str] = []
 
 
 @app.post("/api/mandate")
 def set_mandate(body: MandateIn):
     sid = _check_sid(body.session_id)
     cats = [c for c in body.allowed_categories if c in db.list_categories()]
-    db.set_mandate(sid, body.total_budget, body.max_per_order, cats, body.autopay_limit)
+    blocked = [c for c in body.blocked_categories if c in db.list_categories()]
+    db.set_mandate(sid, body.total_budget, body.max_per_order, cats, body.autopay_limit, body.daily_limit, blocked)
     db.log_decision(sid, "mandate_update", None, "ALLOWED",
                     f"human set budget ${body.total_budget:.2f}, per-order ${body.max_per_order:.2f}, "
-                    f"auto-pay up to ${body.autopay_limit:.2f}, categories {', '.join(cats) or 'all'}")
+                    f"daily ${body.daily_limit:.2f}, auto-pay up to ${body.autopay_limit:.2f}, "
+                    f"categories {', '.join(cats) or 'all'}, blocked {', '.join(blocked) or 'none'}",
+                    {"policy_version": payments.POLICY_VERSION})
     return {"ok": True}
 
 
@@ -356,17 +387,21 @@ class RefundReview(BaseModel):
     session_id: str
     approve: bool
     note: str = Field(default="", max_length=200)
+    amount: float | None = Field(default=None, ge=0, le=100000)
 
 
 @app.post("/api/payments/{payment_id}/refund-review")
 def refund_review(payment_id: int, body: RefundReview):
     """Seller-side decision on a buyer's refund request (shown as the seller view in the demo)."""
     sid = _check_sid(body.session_id)
-    r = payments.review_refund(sid, payment_id, body.approve, body.note)
+    r = payments.review_refund(sid, payment_id, body.approve, body.note, body.amount)
     if not r["ok"]:
         raise HTTPException(400, r["reason"])
-    msg = (f"↩️ The seller approved your refund for payment #{payment_id}: **${r['amount']:.2f}** returned via PayPal."
-           if r["status"] == "REFUNDED" else
+    msg = (f"↩️ The seller approved {'a partial' if r['status'] == 'PARTIALLY_REFUNDED' else 'your'} refund for "
+           f"payment #{payment_id}: **${r['amount']:.2f}** returned via PayPal."
+           if r["status"] in ("REFUNDED", "PARTIALLY_REFUNDED") else
+           f"⏳ The seller approved ${r['amount']:.2f} for payment #{payment_id}; PayPal is still processing the refund."
+           if r["status"] == "REFUND_PENDING" else
            f"✖️ The seller rejected the refund request for payment #{payment_id}."
            + (f" Reason: {body.note}" if body.note else ""))
     db.chat_add(sid, "assistant", msg)
@@ -391,6 +426,21 @@ def seller_message(payment_id: int, body: SellerMessage):
     return {"ok": True}
 
 
+@app.post("/api/security/run")
+def security_run(body: PaymentAction):
+    """Fire the attack suite at the real guard (offline PayPal simulator, throw-away sessions)."""
+    sid = _check_sid(body.session_id)
+    if not auth.current_user.get().get("is_demo"):
+        raise HTTPException(403, "security tests are available in the demo account only")
+    report = security_tests.run_suite()
+    db.log_decision(sid, "security_suite", None, "ALLOWED" if report["stopped"] == report["total"] else "BLOCKED",
+                    f"security test suite: {report['stopped']}/{report['total']} attacks stopped "
+                    f"(offline PayPal simulator, no real money)",
+                    {"policy_version": payments.POLICY_VERSION,
+                     "attacks": [f"{r['name']}: {'stopped' if r['passed'] else 'NOT stopped'}" for r in report["results"]]})
+    return report
+
+
 @app.post("/api/vault/disconnect")
 def vault_disconnect(body: PaymentAction):
     sid = _check_sid(body.session_id)
@@ -401,6 +451,10 @@ def vault_disconnect(body: PaymentAction):
 
 @app.post("/api/reset")
 def reset(body: PaymentAction):
-    """Fresh demo for this user: new budget, chat and wallet (old data stays in the DB)."""
+    """'Start fresh' (demo accounts only): new budget, chat and wallet. Real accounts can't reset their
+    budget this way; limits only change through the logged mandate settings."""
     _check_sid(body.session_id)
-    return {"session_id": auth.new_session_for(auth.current_user.get()["id"])}
+    user = auth.current_user.get()
+    if not user.get("is_demo"):
+        raise HTTPException(403, "starting fresh is only available in demo accounts")
+    return {"session_id": auth.new_session_for(user["id"])}

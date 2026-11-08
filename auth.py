@@ -42,6 +42,9 @@ def init():
             );
             """
         )
+        cols = [r[1] for r in c.execute("PRAGMA table_info(users)")]
+        if "is_demo" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
 
 
 def _hash_password(password, salt=None):
@@ -88,6 +91,20 @@ def signup(name, email, password):
     return _issue_token(user_id), None
 
 
+def create_demo_user():
+    """One-click demo: a private throw-away account (each visitor gets their own, nothing is shared)."""
+    sid = _new_sid()
+    email = f"demo-{secrets.token_hex(4)}@agentpay.demo"
+    with db.connect() as c:
+        cur = c.execute(
+            "INSERT INTO users (email, name, password_hash, active_session, is_demo) VALUES (?, ?, ?, ?, 1)",
+            (email, "Demo user", _hash_password(secrets.token_urlsafe(24)), sid),
+        )
+        c.execute("INSERT INTO user_sessions (session_id, user_id) VALUES (?, ?)", (sid, cur.lastrowid))
+        user_id = cur.lastrowid
+    return _issue_token(user_id)
+
+
 def login(email, password):
     email = (email or "").strip().lower()
     with db.connect() as c:
@@ -115,7 +132,7 @@ def user_from_token(token):
         return None
     with db.connect() as c:
         r = c.execute(
-            """SELECT u.id, u.email, u.name, u.active_session FROM auth_tokens t
+            """SELECT u.id, u.email, u.name, u.active_session, u.is_demo FROM auth_tokens t
                JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?""",
             (_token_hash(token),),
         ).fetchone()

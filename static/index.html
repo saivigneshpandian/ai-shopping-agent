@@ -31,6 +31,8 @@
         <p class="auth-err" id="auth-err" role="alert"></p>
         <button type="submit" class="solid-btn" id="auth-submit">Log in</button>
       </form>
+      <div class="auth-or"><span>or</span></div>
+      <button type="button" class="demo-btn" id="auth-demo">▶ Try the demo <small>no sign-up · includes 🛡️ security tests</small></button>
       <p class="auth-foot">Your spending mandate, PayPal wallet and orders are private to your account.</p>
     </div>
   </div>
@@ -46,7 +48,8 @@
     <div class="topbar-right">
       <span class="mode-chip" id="mode-chip">PayPal</span>
       <span class="user-chip" id="user-chip" hidden></span>
-      <button class="ghost-btn" id="new-session" type="button">New demo</button>
+      <button class="ghost-btn sec-btn" id="sec-open" type="button" hidden>🛡️ Security tests</button>
+      <button class="ghost-btn" id="new-session" type="button" hidden title="Demo accounts only: new budget, empty chat">Start fresh</button>
       <button class="ghost-btn" id="logout" type="button" hidden>Log out</button>
     </div>
   </header>
@@ -66,6 +69,7 @@
             <div><span class="label">Spent / pending</span><span class="num" id="g-spent">$0.00</span></div>
             <div class="right"><span class="label">Remaining</span><span class="num big" id="g-left">$0.00</span></div>
           </div>
+          <div class="today" id="g-today"></div>
         </div>
 
         <div class="wallet" id="wallet"></div>
@@ -77,12 +81,19 @@
           <label>Max per order
             <span class="money"><span>$</span><input type="number" min="0" step="1" id="m-per" required></span>
           </label>
+          <label>Daily limit
+            <span class="money"><span>$</span><input type="number" min="0" step="1" id="m-daily" required></span>
+          </label>
           <label>Auto-pay up to <small class="muted">(no approval needed below this)</small>
             <span class="money"><span>$</span><input type="number" min="0" step="1" id="m-auto" required></span>
           </label>
           <fieldset>
             <legend>Allowed categories <small>(none selected = all)</small></legend>
             <div class="chips" id="m-cats"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Never buy <small>(blocked categories)</small></legend>
+            <div class="chips blocked" id="m-block"></div>
           </fieldset>
           <button type="submit" class="solid-btn">Save mandate</button>
           <p class="hint">Checked in code before every PayPal order. Prompts can't change it.</p>
@@ -101,7 +112,7 @@
       <div class="chat-scroll" id="chat-scroll">
         <div class="welcome" id="welcome">
           <p class="eyebrow">Agentic commerce, with guardrails</p>
-          <h2>Tell the agent what you need.<br><span>It will never spend past your mandate.</span></h2>
+          <h2>Tell the agent what you need.<br><span>Every purchase is checked against your rules before payment.</span></h2>
           <div class="suggestions" id="suggestions"></div>
         </div>
         <ol class="messages" id="messages" aria-live="polite"></ol>
@@ -133,7 +144,7 @@
       <section class="receipt">
         <div class="receipt-head">
           <h2 id="log-h">Guardrail log</h2>
-          <p>Every spending decision, stamped.</p>
+          <p>Every spending decision, stamped. Click one for the full record.</p>
         </div>
         <ol class="log" id="log"></ol>
         <div id="seller-wrap" hidden>
@@ -147,6 +158,26 @@
       </section>
     </aside>
   </main>
+
+  <!-- Security test dashboard -->
+  <div class="sec" id="sec" hidden>
+    <div class="sec-panel" role="dialog" aria-labelledby="sec-h">
+      <header class="sec-head">
+        <div>
+          <p class="eyebrow">Attack simulation</p>
+          <h2 id="sec-h">Can the AI be tricked into overspending?</h2>
+          <p class="sec-sub">Fires 9 real attacks at the actual policy engine. Runs against an offline PayPal simulator in throw-away sessions, so no real or sandbox money moves and your data isn't touched.</p>
+        </div>
+        <button class="sec-x" id="sec-close" type="button" aria-label="Close">✕</button>
+      </header>
+      <div class="sec-policy" id="sec-policy"></div>
+      <div class="sec-actions">
+        <button class="solid-btn" id="sec-run" type="button">▶ Run attack suite</button>
+        <span class="sec-score" id="sec-score" aria-live="polite"></span>
+      </div>
+      <ol class="sec-grid" id="sec-grid"></ol>
+    </div>
+  </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>

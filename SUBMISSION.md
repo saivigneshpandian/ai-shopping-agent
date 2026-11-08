@@ -1,7 +1,13 @@
 # Devpost submission: AgentPay Guard
 
 ## Tagline (short)
-An AI shopping agent that pays with PayPal, but can never spend outside the limits you set.
+An AI shopping agent that pays with PayPal, where every purchase is checked against independently enforced spending rules before payment capture.
+
+## Who it's for
+People who want to use autonomous shopping agents **without giving those agents unrestricted
+access to their money**, starting with budget-conscious online shoppers. Later: parents and
+students with set budgets, families with shared budgets, and businesses giving AI agents controlled
+purchasing permissions.
 
 ## Inspiration
 AI agents can now buy things for us, but would you give an LLM your PayPal? Models hallucinate,
@@ -30,6 +36,17 @@ To prove it, the catalog contains a product whose description carries a prompt i
   the budget (so the agent can't split orders to dodge the cap) and writes an audit log
 - FastAPI backend + a custom vanilla-JS UI: mandate gauge, product cards, PayPal approval card, and a
   till-receipt guardrail log with ALLOWED/BLOCKED stamps; deployed on Render
+
+## Security model
+The agent only **proposes** purchases; a trusted Purchase Authorization Service decides. It re-prices
+items from the catalog (agent prices are ignored), evaluates every rule (currency, categories,
+per-order, daily, total), reserves budget atomically under a per-user lock, uses idempotency keys,
+verifies the amount and currency PayPal actually captured, and only lets **signature-verified PayPal
+webhooks** change payment state (pending, denied, refunded). Refunds are seller-approved, can be partial,
+and can never exceed what's refundable. A built-in **security test dashboard** (demo account) fires 9 attacks
+(price tampering, prompt injection, order splitting, double-spend race, duplicate capture, currency trick,
+amount mismatch, forged webhook, over-refund) at the real policy engine and shows each one stopped, and every
+decision has a full audit record.
 
 ## Challenges
 - Handling the PayPal approval redirect without losing the conversation: the chat transcript is
@@ -81,6 +98,9 @@ instruction in the description, then the agent's attempt to buy 10 ($229.90) →
 **2:25–2:45 Refund with seller review**
 "The jar arrived broken, refund it" → the AI asks for a photo → upload it → the AI files a request (it can't refund itself) → 🏪 Seller review
 → Approve → PayPal refund → ↩️ REFUNDED, budget restored.
+
+**(optional, if time) Security tests**
+Log in with **Try the demo** → 🛡️ Security tests → Run → 9/9 attacks stopped, one card at a time.
 
 **2:45–3:00 Close**
 "AgentPay Guard: a trust layer for agentic commerce, built on PayPal. Next: an MCP server so any agent can use it."

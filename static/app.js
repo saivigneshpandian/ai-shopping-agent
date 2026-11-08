@@ -7,7 +7,7 @@
     send: document.querySelector(".send-btn"), photo: $("photo"), log: $("log"), pays: $("pay-list"),
     cart: $("cart-list"), sellerWrap: $("seller-wrap"), sellerList: $("seller-list"), cartTotal: $("cart-total"), cartCheckout: $("cart-checkout"),
     gFill: $("gauge-fill"), gSpent: $("g-spent"), gLeft: $("g-left"), gauge: $("gauge"),
-    form: $("mandate-form"), mTotal: $("m-total"), mPer: $("m-per"), mAuto: $("m-auto"), mCats: $("m-cats"), wallet: $("wallet"),
+    form: $("mandate-form"), mTotal: $("m-total"), mPer: $("m-per"), mAuto: $("m-auto"), mDaily: $("m-daily"), gToday: $("g-today"), mCats: $("m-cats"), mBlock: $("m-block"), wallet: $("wallet"),
     toast: $("toast"), reset: $("new-session"), attach: $("attach"), attachImg: $("attach-img"), attachX: $("attach-x"),
     photoBtn: document.querySelector(".photo-btn"),
   };
@@ -117,6 +117,79 @@
 
   const scrollDown = () => requestAnimationFrame(() => (els.scroll.scrollTop = els.scroll.scrollHeight));
 
+  // ---------- audit trail: full decision record ----------
+  const openLogs = new Set();
+  function recordHtml(l, d) {
+    const rows = [
+      ["Decision", `<b class="${l.decision === "ALLOWED" ? "p" : "f"}">${esc(l.decision)}</b>`],
+      d.txn_id && ["Transaction", esc(d.txn_id)],
+      ["Policy", esc(d.policy_version || "")],
+      ["Time (UTC)", esc(l.created_at || "")],
+      d.items && ["Items", esc(d.items.join(", "))],
+      d.requested_amount != null && d.final_amount != null && d.requested_amount !== d.final_amount &&
+        ["Agent claimed", money(d.requested_amount)],
+      d.final_amount != null && ["Final amount", money(d.final_amount) + (d.currency ? " " + esc(d.currency) : "")],
+      d.paypal_order_id && ["PayPal order", esc(d.paypal_order_id)],
+      d.capture_id && ["PayPal capture", esc(d.capture_id)],
+      d.paypal_reported && ["PayPal reported", esc(d.paypal_reported)],
+      d.refund_id && ["PayPal refund", esc(d.refund_id) + (d.paypal_refund_status ? " (" + esc(d.paypal_refund_status) + ")" : "")],
+      d.captured != null && ["Money captured", d.captured ? '<b class="p">Yes</b>' : '<b class="f">No</b>'],
+    ].filter(Boolean);
+    const checks = (d.checks || []).map((c) =>
+      `<tr><td>${esc(c.rule)}</td><td>${typeof c.value === "number" ? money(c.value) : esc(c.value)} / ${typeof c.limit === "number" ? money(c.limit) : esc(c.limit)}</td><td class="${c.pass ? "p" : "f"}">${c.pass ? "✓" : "✗"}</td></tr>`).join("");
+    const attacks = (d.attacks || []).map((a) => `<tr><td colspan="3">${esc(a)}</td></tr>`).join("");
+    return `<div class="rec"><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+      ${checks ? `<table aria-label="Rules checked">${checks}</table>` : ""}${attacks ? `<table>${attacks}</table>` : ""}</div>`;
+  }
+  els.log.addEventListener("click", (e) => {
+    const li = e.target.closest("li.has-details");
+    if (!li) return;
+    const id = +li.dataset.log;
+    openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
+    li.classList.toggle("open");
+    li.setAttribute("aria-expanded", li.classList.contains("open"));
+  });
+  els.log.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches("li.has-details")) { e.preventDefault(); e.target.click(); }
+  });
+
+  // ---------- security dashboard ----------
+  const S = { box: $("sec"), open: $("sec-open"), close: $("sec-close"), run: $("sec-run"), grid: $("sec-grid"),
+              score: $("sec-score"), policy: $("sec-policy") };
+  const ATTACKS = [["💲", "Price tampering"], ["🧪", "Prompt injection"], ["✂️", "Order splitting"], ["⚡", "Double-spend race"],
+                   ["🔁", "Duplicate payment"], ["💱", "Currency trick"], ["🧾", "Amount mismatch"],
+                   ["📨", "Forged webhook"], ["💸", "Over-refund"]];
+  function secIdle() {
+    S.grid.innerHTML = ATTACKS.map(([i, n]) => `<li class="atk pending"><h3><span class="ico">${i}</span>${n}</h3><p class="try">Waiting to run…</p></li>`).join("");
+    S.score.textContent = ""; S.score.className = "sec-score";
+  }
+  S.open.onclick = () => { S.box.hidden = false; if (!S.grid.children.length) secIdle(); S.run.focus(); };
+  S.close.onclick = () => (S.box.hidden = true);
+  S.box.addEventListener("click", (e) => { if (e.target === S.box) S.box.hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !S.box.hidden) S.box.hidden = true; });
+  S.run.onclick = async () => {
+    S.run.disabled = true; S.run.textContent = "Attacking…"; secIdle();
+    try {
+      const r = await api("/api/security/run", { method: "POST", body: JSON.stringify({ session_id: sid }) });
+      const p = r.policy;
+      S.policy.innerHTML = `<span>Test policy</span><span>Budget ${money(p.total_budget)}</span><span>Per order ${money(p.max_per_order)}</span><span>Daily ${money(p.daily_limit)}</span><span>Auto-pay ≤ ${money(p.autopay_limit)}</span><span>Currency USD</span>`;
+      S.grid.innerHTML = r.results.map((a, i) => `
+        <li class="atk ${a.passed ? "" : "failed"}" style="animation-delay:${i * 180}ms">
+          <span class="stamp ${a.passed ? (a.outcome === "CONTAINED" ? "allow" : "block") : "fail"}" style="animation-delay:${i * 180 + 250}ms">${a.passed ? a.outcome : "NOT STOPPED"}</span>
+          <h3><span class="ico">${a.icon}</span>${esc(a.name)}</h3>
+          <p class="try">${esc(a.attack)}</p>
+          <div class="res">${esc(a.detail || "")}</div>
+          <div class="atk-money">Money the attack got out: <b>${money(a.leaked)}</b>${a.legit ? ` · legitimate spend kept within limits: <b>${money(a.legit)}</b>` : ""}</div>
+        </li>`).join("");
+      setTimeout(() => {
+        S.score.textContent = `${r.stopped} / ${r.total} attacks stopped`;
+        S.score.className = "sec-score " + (r.stopped === r.total ? "all" : "fail");
+      }, r.results.length * 180 + 300);
+      refresh({ messages: false });
+    } catch (err) { toast(err.message.slice(0, 120)); }
+    S.run.disabled = false; S.run.textContent = "▶ Run attack suite again";
+  };
+
   // ---------- state rendering ----------
   function renderState(s) {
     els.mode.textContent = s.mode === "mock" ? "Mock PayPal · offline" : `PayPal ${s.mode}`;
@@ -130,6 +203,9 @@
     els.gFill.classList.toggle("full", frac >= 0.95);
     els.gSpent.textContent = `${money(s.spent)} of ${money(m.total_budget)}`;
     els.gLeft.textContent = money(Math.max(s.remaining, 0));
+    const td = s.spent_today || 0;
+    els.gToday.innerHTML = `Today: <b>${money(td)}</b> of ${money(m.daily_limit)} daily limit`;
+    els.gToday.classList.toggle("near", m.daily_limit > 0 && td / m.daily_limit >= 0.7);
     els.gauge.setAttribute("aria-label", `Budget used: ${money(s.spent)} of ${money(m.total_budget)}, ${money(s.remaining)} remaining`);
 
     // mandate form (don't clobber while the user is editing)
@@ -137,8 +213,11 @@
       els.mTotal.value = m.total_budget;
       els.mPer.value = m.max_per_order;
       els.mAuto.value = m.autopay_limit;
+      els.mDaily.value = m.daily_limit;
       els.mCats.innerHTML = s.categories.map((c) =>
         `<label class="chip"><input type="checkbox" value="${esc(c)}" ${m.allowed_categories.includes(c) ? "checked" : ""}><span>${esc(c)}</span></label>`).join("");
+      els.mBlock.innerHTML = s.categories.map((c) =>
+        `<label class="chip"><input type="checkbox" value="${esc(c)}" ${(m.blocked_categories || []).includes(c) ? "checked" : ""}><span>${esc(c)}</span></label>`).join("");
     }
 
     // saved PayPal wallet for auto-pay
@@ -169,11 +248,13 @@
     els.log.innerHTML = s.log.length ? s.log.map((l) => {
       const fresh = !firstLoad && !seenLog.has(l.id);
       const allow = l.decision === "ALLOWED";
-      const action = { create_order: "PAY", auto_pay: "⚡ AUTO-PAY", refund: "REFUND", mandate_update: "MANDATE", cancel_order: "CANCEL", wallet_connect: "WALLET", wallet_disconnect: "WALLET", refund_request: "REFUND REQ", refund_review: "REFUND" }[l.action] || l.action;
-      return `<li class="${fresh ? "fresh" : ""}">
+      const action = { create_order: "PAY", auto_pay: "⚡ AUTO-PAY", refund: "REFUND", mandate_update: "MANDATE", cancel_order: "CANCEL", wallet_connect: "WALLET", wallet_disconnect: "WALLET", refund_request: "REFUND REQ", refund_review: "REFUND", capture: "CAPTURE", verify_capture: "VERIFY", security_suite: "🛡️ SECURITY TEST", webhook: "WEBHOOK" }[l.action] || l.action;
+      const d = l.details;
+      return `<li class="${fresh ? "fresh" : ""} ${d ? "has-details" : ""} ${openLogs.has(l.id) ? "open" : ""}" data-log="${l.id}" ${d ? 'tabindex="0" role="button" aria-expanded="' + openLogs.has(l.id) + '"' : ""}>
         <div class="row"><span>${esc(action)}${l.amount != null ? " · " + money(l.amount) : ""}</span><span class="time">${esc((l.created_at || "").slice(11, 16))}</span></div>
         <div class="why">${esc(l.reason)}</div>
         <span class="stamp ${allow ? "allow" : "block"}">${allow ? "ALLOWED" : "BLOCKED"}</span>
+        ${d ? recordHtml(l, d) : ""}
       </li>`;
     }).join("") : '<li class="empty">No decisions yet. Ask the agent to buy something.</li>';
     s.log.forEach((l) => seenLog.add(l.id));
@@ -181,7 +262,7 @@
     // payments
     els.pays.innerHTML = s.payments.length ? s.payments.map((p) =>
       `<li><span class="pid">#${p.id}</span><span class="items">${esc(p.items.map((i) => i.name).join(", "))}</span><span class="amt">${money(p.amount)}</span>
-       <span class="status ${p.status} ${p.auto_paid && p.status === "COMPLETED" ? "auto" : ""}">${p.status === "CREATED" ? "AWAITING APPROVAL" : p.status === "REFUND_REQUESTED" ? "REFUND REQUESTED · WITH SELLER" : (p.auto_paid && p.status === "COMPLETED" ? "⚡ AUTO-PAID" : p.status)}</span></li>`).join("")
+       <span class="status ${p.status} ${p.auto_paid && p.status === "COMPLETED" ? "auto" : ""}">${p.status === "CREATED" ? "AWAITING APPROVAL · BUDGET RESERVED" : p.status === "REFUND_REQUESTED" ? "REFUND REQUESTED · WITH SELLER" : p.status === "AMOUNT_MISMATCH" ? "⚠ AMOUNT MISMATCH · FLAGGED" : p.status === "REFUND_PENDING" ? "REFUND PENDING AT PAYPAL" : p.status === "PARTIALLY_REFUNDED" ? `PARTIALLY REFUNDED · ${money(p.refunded_amount)} BACK` : p.status === "CAPTURE_PENDING" ? "PAYPAL PROCESSING · BUDGET RESERVED" : p.status === "DENIED" ? "DENIED BY PAYPAL · NOTHING CHARGED" : (p.auto_paid && p.status === "COMPLETED" ? "⚡ AUTO-PAID" : p.status)}</span></li>`).join("")
       : '<li class="empty">No payments yet</li>';
 
     // seller review queue for refund requests
@@ -193,6 +274,7 @@
         ${p.evidence_path ? `<a href="/api/evidence/${p.id}?session_id=${sid}" target="_blank" rel="noopener" class="evidence"><img src="/api/evidence/${p.id}?session_id=${sid}" alt="Buyer's photo evidence for payment #${p.id}"><span>📷 Photo evidence · click to enlarge</span></a>` : ""}
         ${p.thread && p.thread.length ? `<ol class="thread">${p.thread.map((m) => `<li class="t-${m.sender}"><b>${m.sender === "seller" ? "🏪 Seller" : "🛒 Buyer"}</b>${esc(m.text)}${m.image ? `<a href="/api/uploads/${encodeURIComponent(m.image)}?session_id=${sid}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(m.image)}?session_id=${sid}" alt="Buyer photo"></a>` : ""}</li>`).join("")}</ol>` : ""}
         ${p.thread && p.thread.length && p.thread[p.thread.length - 1].sender === "seller" ? `<div class="waiting">⏳ Waiting for the buyer's answer…</div>` : ""}
+        <label class="refund-amt">Refund $<input type="number" step="0.01" min="0.01" max="${(p.amount - (p.refunded_amount || 0)).toFixed(2)}" value="${(p.amount - (p.refunded_amount || 0)).toFixed(2)}" data-amt="${p.id}" aria-label="Refund amount for payment ${p.id}"> of ${money(p.amount - (p.refunded_amount || 0))} refundable</label>
         <form class="ask" data-ask="${p.id}"><input name="q" maxlength="500" placeholder="Ask the buyer a question…" aria-label="Question for the buyer" autocomplete="off"><button type="submit">Ask</button></form>
         <div class="acts"><button class="ok" data-review="${p.id}" data-approve="1">Approve refund</button>
         <button class="no" data-review="${p.id}" data-approve="0">Reject</button></div></li>`).join("");
@@ -358,9 +440,11 @@
     if (!b) return;
     const approve = b.dataset.approve === "1";
     const note = approve ? "" : (prompt("Reason for rejecting (shown to the buyer):", "No proof of damage provided") || "");
+    const amtInput = els.sellerList.querySelector(`input[data-amt="${b.dataset.review}"]`);
+    const amount = approve && amtInput ? +amtInput.value : null;
     try {
       const r = await api(`/api/payments/${b.dataset.review}/refund-review`, {
-        method: "POST", body: JSON.stringify({ session_id: sid, approve, note }),
+        method: "POST", body: JSON.stringify({ session_id: sid, approve, note, amount }),
       });
       toast(r.message.replace(/\*\*/g, ""));
     } catch (err) { toast(err.message.slice(0, 120)); }
@@ -385,9 +469,10 @@
   els.form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const cats = [...els.mCats.querySelectorAll("input:checked")].map((i) => i.value);
+    const blocked = [...els.mBlock.querySelectorAll("input:checked")].map((i) => i.value);
     await api("/api/mandate", {
       method: "POST",
-      body: JSON.stringify({ session_id: sid, total_budget: +els.mTotal.value, max_per_order: +els.mPer.value, autopay_limit: +els.mAuto.value, allowed_categories: cats }),
+      body: JSON.stringify({ session_id: sid, total_budget: +els.mTotal.value, max_per_order: +els.mPer.value, autopay_limit: +els.mAuto.value, daily_limit: +els.mDaily.value, allowed_categories: cats, blocked_categories: blocked }),
     });
     mandateDirty = false;
     toast("Mandate saved. The agent is now bound by it.");
@@ -401,7 +486,7 @@
     firstLoad = true;
     mandateDirty = false;
     refresh();
-    toast("Fresh demo session started");
+    toast("Started fresh: new budget, empty chat");
   });
 
   // ---------- accounts ----------
@@ -442,11 +527,22 @@
     }
   });
 
+  $("auth-demo").addEventListener("click", async () => {
+    A.err.textContent = "";
+    try {
+      await api("/api/auth/demo", { method: "POST" });
+      await start();
+      toast("Demo account ready: try 🛡️ Security tests");
+    } catch (err) { A.err.textContent = err.message; }
+  });
+
   A.logout.addEventListener("click", async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     sid = null;
     els.messages.innerHTML = "";
     A.chip.hidden = A.logout.hidden = true;
+    $("sec-open").hidden = true;
+    els.reset.hidden = true;
     setMode("login");
     showAuth();
   });
@@ -459,6 +555,9 @@
     A.chip.textContent = "👤 " + meInfo.name;
     A.chip.title = meInfo.email;
     A.chip.hidden = A.logout.hidden = false;
+    A.chip.classList.toggle("demo", !!meInfo.is_demo);
+    $("sec-open").hidden = !meInfo.is_demo;
+    els.reset.hidden = !meInfo.is_demo;
     seenLog = new Set(); firstLoad = true; mandateDirty = false;
     const params = new URLSearchParams(location.search);
     await refresh();

@@ -79,6 +79,13 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- PayPal webhook events already processed (replays are ignored).
+            CREATE TABLE IF NOT EXISTS webhook_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                received_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Chat transcript shown in the UI (survives the PayPal redirect).
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +113,11 @@ def init_db():
             ("payments", "auto_paid", "ALTER TABLE payments ADD COLUMN auto_paid INTEGER NOT NULL DEFAULT 0"),
             ("payments", "evidence_path", "ALTER TABLE payments ADD COLUMN evidence_path TEXT"),
             ("chat_messages", "image", "ALTER TABLE chat_messages ADD COLUMN image TEXT"),
+            ("mandates", "daily_limit", "ALTER TABLE mandates ADD COLUMN daily_limit REAL NOT NULL DEFAULT 40"),
+            ("guardrail_log", "details", "ALTER TABLE guardrail_log ADD COLUMN details TEXT"),
+            ("mandates", "blocked_categories", "ALTER TABLE mandates ADD COLUMN blocked_categories TEXT NOT NULL DEFAULT '[]'"),
+            ("payments", "refunded_amount", "ALTER TABLE payments ADD COLUMN refunded_amount REAL NOT NULL DEFAULT 0"),
+            ("payments", "refund_requested_amount", "ALTER TABLE payments ADD COLUMN refund_requested_amount REAL"),
         ):
             cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
             if col not in cols:
@@ -173,7 +185,8 @@ def cart_clear(session_id):
 
 # ---------------- mandate ----------------
 
-DEFAULT_MANDATE = {"total_budget": 60.0, "max_per_order": 25.0, "allowed_categories": [], "autopay_limit": 15.0}
+DEFAULT_MANDATE = {"total_budget": 60.0, "max_per_order": 25.0, "allowed_categories": [], "autopay_limit": 15.0,
+                   "daily_limit": 40.0, "blocked_categories": []}
 
 
 def get_mandate(session_id):
@@ -186,23 +199,31 @@ def get_mandate(session_id):
         "max_per_order": r["max_per_order"],
         "allowed_categories": json.loads(r["allowed_categories"]),
         "autopay_limit": r["autopay_limit"],
+        "daily_limit": r["daily_limit"],
+        "blocked_categories": json.loads(r["blocked_categories"] or "[]"),
     }
 
 
-def set_mandate(session_id, total_budget, max_per_order, allowed_categories, autopay_limit=None):
-    if autopay_limit is None:
-        autopay_limit = get_mandate(session_id)["autopay_limit"]
+def set_mandate(session_id, total_budget, max_per_order, allowed_categories, autopay_limit=None, daily_limit=None,
+                blocked_categories=None):
+    cur = get_mandate(session_id)
+    autopay_limit = cur["autopay_limit"] if autopay_limit is None else autopay_limit
+    daily_limit = cur["daily_limit"] if daily_limit is None else daily_limit
+    blocked_categories = cur["blocked_categories"] if blocked_categories is None else blocked_categories
     with connect() as c:
         c.execute(
-            """INSERT INTO mandates (session_id, total_budget, max_per_order, allowed_categories, autopay_limit)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO mandates (session_id, total_budget, max_per_order, allowed_categories, autopay_limit,
+                                     daily_limit, blocked_categories)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(session_id) DO UPDATE SET total_budget = excluded.total_budget,
                  max_per_order = excluded.max_per_order,
                  allowed_categories = excluded.allowed_categories,
                  autopay_limit = excluded.autopay_limit,
+                 daily_limit = excluded.daily_limit,
+                 blocked_categories = excluded.blocked_categories,
                  updated_at = datetime('now')""",
             (session_id, float(total_budget), float(max_per_order), json.dumps(list(allowed_categories)),
-             float(autopay_limit)),
+             float(autopay_limit), float(daily_limit), json.dumps(list(blocked_categories))),
         )
 
 
@@ -229,12 +250,29 @@ def remove_wallet(session_id):
         c.execute("DELETE FROM wallets WHERE session_id = ?", (session_id,))
 
 
+# Statuses whose money counts against the budget. Pending approvals are RESERVED (so several
+# open orders can't dodge the cap); refunds only give budget back once PayPal says COMPLETED;
+# a capture whose amount didn't match stays counted until a human sorts it out.
+COUNTED = ("('CREATED', 'CAPTURE_PENDING', 'COMPLETED', 'PARTIALLY_REFUNDED', 'REFUND_REQUESTED', "
+           "'REFUND_PENDING', 'AMOUNT_MISMATCH')")
+# Partial refunds give back only what PayPal actually refunded.
+NET = "(amount - COALESCE(refunded_amount, 0))"
+
+
 def spent_so_far(session_id):
-    """Money that counts against the budget: completed payments plus orders still
-    awaiting approval (so the agent can't open several orders to dodge the cap)."""
     with connect() as c:
         r = c.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE session_id = ? AND status IN ('CREATED', 'COMPLETED', 'REFUND_REQUESTED')",
+            f"SELECT COALESCE(SUM({NET}), 0) FROM payments WHERE session_id = ? AND status IN {COUNTED}",
+            (session_id,),
+        ).fetchone()
+    return round(r[0], 2)
+
+
+def spent_today(session_id):
+    with connect() as c:
+        r = c.execute(
+            f"""SELECT COALESCE(SUM({NET}), 0) FROM payments WHERE session_id = ? AND status IN {COUNTED}
+                AND date(created_at) = date('now')""",
             (session_id,),
         ).fetchone()
     return round(r[0], 2)
@@ -258,6 +296,21 @@ def payment_get(paypal_order_id):
     with connect() as c:
         r = c.execute("SELECT * FROM payments WHERE paypal_order_id = ?", (paypal_order_id,)).fetchone()
     return _payment_row(r)
+
+
+def payment_get_by_capture(capture_id):
+    with connect() as c:
+        r = c.execute("SELECT * FROM payments WHERE capture_id = ?", (capture_id,)).fetchone()
+    return _payment_row(r)
+
+
+def webhook_seen(event_id, event_type):
+    """Record an event id; returns True if it was already processed (replay)."""
+    with connect() as c:
+        if c.execute("SELECT 1 FROM webhook_events WHERE event_id = ?", (event_id,)).fetchone():
+            return True
+        c.execute("INSERT INTO webhook_events (event_id, event_type) VALUES (?, ?)", (event_id, event_type))
+    return False
 
 
 def payment_get_by_id(session_id, local_id):
@@ -341,11 +394,11 @@ def chat_history(session_id):
 
 # ---------------- guardrail log ----------------
 
-def log_decision(session_id, action, amount, decision, reason):
+def log_decision(session_id, action, amount, decision, reason, details=None):
     with connect() as c:
         c.execute(
-            "INSERT INTO guardrail_log (session_id, action, amount, decision, reason) VALUES (?, ?, ?, ?, ?)",
-            (session_id, action, amount, decision, reason),
+            "INSERT INTO guardrail_log (session_id, action, amount, decision, reason, details) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, action, amount, decision, reason, json.dumps(details) if details else None),
         )
 
 
@@ -354,4 +407,9 @@ def guardrail_log(session_id, limit=20):
         rows = c.execute(
             "SELECT * FROM guardrail_log WHERE session_id = ? ORDER BY id DESC LIMIT ?", (session_id, limit)
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["details"] = json.loads(d["details"]) if d.get("details") else None
+        out.append(d)
+    return out

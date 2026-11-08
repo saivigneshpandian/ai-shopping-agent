@@ -20,3 +20,9 @@ services:
         sync: false
       - key: GOOGLE_API_KEY
         sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: DEMO_ENABLED
+        value: "true"
