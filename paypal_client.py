@@ -25,7 +25,7 @@ class PayPalClient:
         self.client_id = os.environ.get("PAYPAL_CLIENT_ID", "")
         self.secret = os.environ.get("PAYPAL_CLIENT_SECRET", "")
         self.base = LIVE_BASE if self.mode == "live" else SANDBOX_BASE
-        self.app_url = os.environ.get("APP_URL", "http://localhost:8501").rstrip("/")
+        self.app_url = os.environ.get("APP_URL", "http://localhost:8000").rstrip("/")
         self._token = None
         self._token_exp = 0
         if self.mode != "mock" and not (self.client_id and self.secret):
@@ -70,7 +70,7 @@ class PayPalClient:
         if self.is_mock:
             oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
             _MOCK[oid] = {"status": "CREATED", "amount": item_total}
-            return oid, f"{self.app_url}/?token={oid}&PayerID=MOCKPAYER"
+            return oid, f"{self.app_url}/paypal/return?token={oid}&PayerID=MOCKPAYER"
 
         body = {
             "intent": "CAPTURE",
@@ -101,8 +101,8 @@ class PayPalClient:
                         "brand_name": "AI Checkout Agent",
                         "user_action": "PAY_NOW",
                         "shipping_preference": "NO_SHIPPING",
-                        "return_url": f"{self.app_url}/",
-                        "cancel_url": f"{self.app_url}/?cancelled=1",
+                        "return_url": f"{self.app_url}/paypal/return",
+                        "cancel_url": f"{self.app_url}/paypal/cancel",
                     }
                 }
             },

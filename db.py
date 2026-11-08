@@ -59,6 +59,15 @@ def init_db():
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Chat transcript shown in the UI (survives the PayPal redirect).
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Every allow/block decision the guardrail makes, for transparency.
             CREATE TABLE IF NOT EXISTS guardrail_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,6 +225,21 @@ def _payment_row(r):
     d = dict(r)
     d["items"] = json.loads(d.pop("items_json"))
     return d
+
+
+# ---------------- chat ----------------
+
+def chat_add(session_id, role, content):
+    with connect() as c:
+        c.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, role, content))
+
+
+def chat_history(session_id):
+    with connect() as c:
+        rows = c.execute(
+            "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id", (session_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------- guardrail log ----------------

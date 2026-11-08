@@ -57,7 +57,8 @@ PayPal Orders v2 (create → buyer approves → capture)  ·  Payments v2 (refun
 | `payments.py` | **Mandate guardrail** + checkout / confirm / refund service |
 | `paypal_client.py` | PayPal REST client: OAuth, create order, capture, refund (+ offline mock mode) |
 | `db.py` | SQLite: products, reviews, cart, mandates, payments, guardrail log |
-| `app.py` | Streamlit UI: chat, mandate panel, PayPal approval cards, guardrail log |
+| `server.py` | FastAPI backend: chat, state, mandate, PayPal return/cancel routes |
+| `static/` | Custom web UI (vanilla HTML/CSS/JS): chat with product cards, mandate gauge, receipt-style guardrail log |
 
 ### PayPal integration
 - `POST /v1/oauth2/token`: client-credentials auth
@@ -73,6 +74,11 @@ orders at once to slip past the cap.
 - **Google Gemini 2.5 Flash**: identifies products from photos
 - **LangChain / LangGraph**: agent runtime + conversation memory
 
+### UI
+A custom "vault ledger" interface: a human-only mandate panel with a budget gauge, a chat with
+product cards and one-tap buy, a PayPal approval card, and a till-receipt guardrail log where every
+decision gets an ALLOWED / BLOCKED stamp. The chat survives the PayPal redirect.
+
 ---
 
 ## Run it
@@ -82,7 +88,7 @@ git clone https://github.com/saivigneshpandian/ai-shopping-agent.git
 cd ai-shopping-agent
 pip install -r requirements.txt
 cp .env.example .env      # add PayPal sandbox + Groq + Google keys
-streamlit run app.py
+uvicorn server:app --reload   # starts the app at http://localhost:8000
 ```
 
 - **PayPal sandbox keys:** developer.paypal.com → Apps & Credentials → Sandbox → Create App
@@ -91,7 +97,7 @@ streamlit run app.py
 
 ### Deploy on Render
 `render.yaml` is included. Create a Blueprint from the repo, fill in the secret env vars,
-and set `APP_URL` to your Render URL so PayPal redirects back to the app.
+and set `APP_URL` to your exact Render URL (e.g. `https://agentpay-guard.onrender.com`) so PayPal redirects back to the app.
 
 ## Demo script
 1. "Show me organic honey under $20" → rated results

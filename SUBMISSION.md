@@ -25,11 +25,12 @@ To prove it, the catalog contains a product whose description carries a prompt i
   capture with idempotency keys), Payments v2 (refunds)
 - A guardrail service that enforces the mandate outside the LLM, counts pending orders against
   the budget (so the agent can't split orders to dodge the cap) and writes an audit log
-- Streamlit UI with the mandate panel, PayPal approval cards and the guardrail log; deployed on Render
+- FastAPI backend + a custom vanilla-JS UI: mandate gauge, product cards, PayPal approval card, and a
+  till-receipt guardrail log with ALLOWED/BLOCKED stamps; deployed on Render
 
 ## Challenges
-- Handling the PayPal approval redirect in Streamlit, where a redirect starts a new session:
-  solved by making the return page capture by order ID and making capture idempotent
+- Handling the PayPal approval redirect without losing the conversation: the chat transcript is
+  persisted server-side, the return route captures by order ID, and capture is idempotent
 - Making safety independent of the model: the LLM never sees or edits the limits, and mandate
   changes only come from the UI
 
@@ -47,7 +48,7 @@ enforced in code, plus an audit trail the user can read.
 - Weekly/monthly budgets and merchant allowlists
 
 ## Built with
-python, langchain, langgraph, groq, llama, gemini, paypal-orders-api, paypal-payments-api, streamlit, sqlite, render
+python, langchain, langgraph, groq, llama, gemini, paypal-orders-api, paypal-payments-api, fastapi, javascript, sqlite, render
 
 ---
 
@@ -57,7 +58,7 @@ python, langchain, langgraph, groq, llama, gemini, paypal-orders-api, paypal-pay
 "AI agents can shop for us now. But would you give one your PayPal? This is AgentPay Guard."
 
 **0:15–0:35 Set the mandate**
-Show the sidebar: budget $60, max $25 per order. "I set the limits. The agent can't touch them."
+Show the mandate panel: budget $60, max $25 per order. "I set the limits. The agent can't touch them."
 
 **0:35–0:55 Browse**
 Type: "Show me organic honey under $20" → rated results.
