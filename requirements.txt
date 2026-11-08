@@ -1,0 +1,7 @@
+langchain>=1.0
+langgraph>=1.0
+langchain-groq>=1.0
+langchain-google-genai>=4.0
+streamlit>=1.40
+python-dotenv
+requests
