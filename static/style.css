@@ -327,3 +327,58 @@ legend small { color: var(--ink-soft); font-weight: 400; }
 
 /* product results use the full chat width so cards sit side by side */
 .msg.assistant .bubble:has(.products) { width: min(760px, 100%); max-width: 100%; }
+
+/* saved PayPal wallet (auto-pay) */
+.wallet { border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px; margin-bottom: 14px; background: #fff; }
+.wallet .w-title { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 6px; }
+.wallet p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); }
+.wallet .pp-btn { font-size: 13px; padding: 9px 14px; }
+.wallet.on { border-style: solid; border-color: var(--allow); background: var(--allow-bg); }
+.wallet.on .w-title { color: var(--allow); }
+.wallet .w-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
+.wallet .w-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status.auto { color: var(--allow); font-weight: 600; }
+.mandate-form label small { font-weight: 400; }
+
+/* seller refund review */
+.seller-hint { margin: 0 0 6px; text-align: center; font-size: 10px; color: var(--ink-soft); }
+.seller-list { list-style: none; margin: 0; padding: 0; }
+.seller-list li { border: 1.5px dashed #c98a00; border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 12px; background: #fff8e6; animation: rise .4s var(--ease); }
+.seller-list .claim { color: var(--ink-soft); margin: 4px 0 8px; font-style: italic; }
+.seller-list .acts { display: flex; gap: 6px; }
+.seller-list button { flex: 1; font: 600 11px var(--mono); padding: 7px; border-radius: 6px; cursor: pointer; border: 1.5px solid; background: #fff; }
+.seller-list .ok { color: var(--allow); border-color: var(--allow); }
+.seller-list .ok:hover { background: var(--allow); color: #fff; }
+.seller-list .no { color: var(--block); border-color: var(--block); }
+.seller-list .no:hover { background: var(--block); color: #fff; }
+.status.REFUND_REQUESTED { color: #a87400; }
+.seller-list .evidence { display: block; margin: 0 0 8px; text-decoration: none; color: var(--ink-soft); font-size: 10px; }
+.seller-list .evidence img { width: 100%; max-height: 140px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; margin-bottom: 4px; }
+
+/* Claude-style attachment preview above the composer */
+.attach { display: flex; align-items: center; gap: 12px; padding: 12px 18px 0; background: var(--paper-2); border-top: 1px solid var(--line); }
+.attach[hidden] { display: none; }
+.attach + .composer { border-top: 0; }
+.attach-chip { position: relative; width: 72px; height: 72px; flex: none; animation: rise .25s var(--ease); }
+.attach-chip img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); box-shadow: var(--shadow); }
+.attach-x { position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--ink); color: var(--paper-2); font-size: 11px; line-height: 22px; padding: 0; }
+.attach-x:hover { background: var(--block); }
+.attach-hint { font-size: 12px; color: var(--ink-soft); }
+.photo-btn.has-photo { border-color: var(--pp-blue); background: #eaf3ff; }
+.msg-img { display: block; max-width: 240px; max-height: 240px; border-radius: 10px; margin: 2px 0 6px; border: 1px solid rgba(255,255,255,.25); object-fit: cover; }
+.msg.user .bubble p:empty { display: none; }
+
+/* seller <-> buyer thread on a refund request */
+.thread { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 5px; }
+.thread li { border: 0 !important; padding: 6px 8px !important; margin: 0 !important; border-radius: 6px; font-size: 11px; animation: none !important; }
+.thread .t-seller { background: #fde9b8 !important; }
+.thread .t-buyer { background: #e7eefb !important; }
+.thread b { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; display: block; margin-bottom: 2px; }
+.thread img { display: block; max-width: 100%; max-height: 110px; border-radius: 4px; margin-top: 4px; }
+.ask { display: flex; gap: 6px; margin-bottom: 8px; }
+.ask input { flex: 1; min-width: 0; font: 12px var(--body); padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.ask input:focus { outline: none; border-color: var(--pp-blue); }
+.seller-list .ask button { flex: none; color: var(--ink); border-color: var(--ink); }
+.seller-list .ask button:hover { background: var(--ink); color: #fff; }
+.waiting { font: 600 10px var(--mono); color: #a87400; margin: -2px 0 8px; }

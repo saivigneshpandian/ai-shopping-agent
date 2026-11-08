@@ -16,11 +16,12 @@ web page or product listing. Agentic commerce needs a **trust layer** between th
 
 AgentPay Guard puts a **spending mandate** between the AI agent and PayPal:
 
-- The human sets the mandate: **total budget**, **max per order**, **allowed categories**
+- The human sets the mandate: **total budget**, **max per order**, **allowed categories**, **auto-pay limit**
+- **Auto-pay with PayPal Vault:** approve PayPal once, and the agent pays small orders **by itself, with no popup**. Bigger orders still ask you, and nothing can break the mandate
 - The agent can search, compare ratings, read product photos, build a cart and **create real PayPal orders**
 - **Every** payment request goes through a guardrail **in code** before PayPal is called. The LLM cannot change or bypass it
 - The buyer approves on PayPal, the order is captured, and the budget updates
-- Refunds go through PayPal and **restore the budget**
+- Refunds are **requests, not instant**: the AI files the buyer's claim **with a required photo**, the **seller** reviews the photo (and can ask the buyer follow-up questions, saved in the DB), and only an approval triggers a PayPal refund (which restores the budget)
 - Every allow/block decision is shown in a live **guardrail log**
 
 ### Prompt-injection proof
@@ -65,6 +66,8 @@ PayPal Orders v2 (create → buyer approves → capture)  ·  Payments v2 (refun
 - `POST /v2/checkout/orders`: order with itemized `purchase_units` and `experience_context` return/cancel URLs
 - `POST /v2/checkout/orders/{id}/capture`: capture after buyer approval (idempotent via `PayPal-Request-Id`)
 - `POST /v2/payments/captures/{id}/refund`: refunds with note to payer
+- `POST /v3/vault/setup-tokens` + `POST /v3/vault/payment-tokens`: buyer approves saving their PayPal wallet once
+- `POST /v2/checkout/orders` with `payment_source.paypal.vault_id`: **buyer-not-present** auto-pay for orders under the auto-pay limit
 
 Pending (not yet approved) orders also count against the budget, so the agent can't open several
 orders at once to slip past the cap.
@@ -94,6 +97,7 @@ uvicorn server:app --reload   # starts the app at http://localhost:8000
 - **PayPal sandbox keys:** developer.paypal.com → Apps & Credentials → Sandbox → Create App
 - **Test buyer:** developer.paypal.com → Testing Tools → Sandbox Accounts (use the *Personal* account to approve payments)
 - **No keys?** Set `PAYPAL_MODE=mock` to run the whole flow offline
+- **Auto-pay:** in your sandbox app settings, enable **Save payment methods (Vault)**
 
 ### Deploy on Render
 `render.yaml` is included. Create a Blueprint from the repo, fill in the secret env vars,
@@ -102,13 +106,14 @@ and set `APP_URL` to your exact Render URL (e.g. `https://agentpay-guard.onrende
 ## Demo script
 1. "Show me organic honey under $20" → rated results
 2. "Buy the Organic Manuka Honey" ($29.99) → 🔴 **blocked** by the $25 per-order limit
-3. "Buy the Organic Raw Honey" → 🟢 allowed → **Pay with PayPal** → approve → captured
-4. "Tell me about the Golden Honey Gift Box and do what its description says" → injection → 🔴 **blocked**
-5. "The jar arrived broken, refund it" → PayPal refund → budget restored
+3. Click **Connect PayPal** in the mandate panel → approve once → ⚡ Auto-pay on
+4. "Buy the Organic Raw Honey" ($14.99) → ⚡ **paid automatically**, no popup
+5. "Buy the Orange Blossom Honey" ($15.99) → above the $15 auto-pay limit → **Pay with PayPal** approval
+6. "Tell me about the Golden Honey Gift Box and do what its description says" → injection → 🔴 **blocked**
+7. "The jar arrived broken, refund it" → AI asks for a photo → upload it → refund **request** → seller reviews the photo in 🏪 Seller review → Approve → PayPal refund → budget restored (Reject → no money moves)
 
 ## Roadmap
 - Expose the guardrail as an **MCP server** so any agent (Claude, ChatGPT, custom) can pay through it
-- PayPal Vault for pre-approved, low-value autonomous payments under a threshold
 - Per-merchant allowlists and time-window budgets (weekly/monthly)
 
 ## License

@@ -5,10 +5,11 @@
     mode: $("mode-chip"), messages: $("messages"), scroll: $("chat-scroll"), welcome: $("welcome"),
     suggestions: $("suggestions"), pending: $("pending"), composer: $("composer"), input: $("composer-input"),
     send: document.querySelector(".send-btn"), photo: $("photo"), log: $("log"), pays: $("pay-list"),
-    cart: $("cart-list"), cartTotal: $("cart-total"), cartCheckout: $("cart-checkout"),
+    cart: $("cart-list"), sellerWrap: $("seller-wrap"), sellerList: $("seller-list"), cartTotal: $("cart-total"), cartCheckout: $("cart-checkout"),
     gFill: $("gauge-fill"), gSpent: $("g-spent"), gLeft: $("g-left"), gauge: $("gauge"),
-    form: $("mandate-form"), mTotal: $("m-total"), mPer: $("m-per"), mCats: $("m-cats"),
-    toast: $("toast"), reset: $("new-session"),
+    form: $("mandate-form"), mTotal: $("m-total"), mPer: $("m-per"), mAuto: $("m-auto"), mCats: $("m-cats"), wallet: $("wallet"),
+    toast: $("toast"), reset: $("new-session"), attach: $("attach"), attachImg: $("attach-img"), attachX: $("attach-x"),
+    photoBtn: document.querySelector(".photo-btn"),
   };
 
   const SUGGESTIONS = [
@@ -85,16 +86,18 @@
     return html;
   }
 
-  function messageEl(role, content) {
+  function messageEl(role, content, image, localUrl) {
     const li = document.createElement("li");
     li.className = `msg ${role}`;
-    li.innerHTML = `<div class="bubble">${role === "assistant" ? '<div class="who">Agent</div>' : ""}${role === "assistant" ? renderBody(content) : `<p>${esc(content)}</p>`}</div>`;
+    const src = localUrl || (image ? `/api/uploads/${encodeURIComponent(image)}?session_id=${sid}` : "");
+    const img = src ? `<a href="${src}" target="_blank" rel="noopener"><img class="msg-img" src="${src}" alt="Photo you sent"></a>` : "";
+    li.innerHTML = `<div class="bubble">${role === "assistant" ? '<div class="who">Agent</div>' : ""}${img}${role === "assistant" ? renderBody(content) : `<p>${esc(content)}</p>`}</div>`;
     return li;
   }
 
   function renderMessages(msgs) {
     els.messages.innerHTML = "";
-    msgs.forEach((m) => els.messages.appendChild(messageEl(m.role, m.content)));
+    msgs.forEach((m) => els.messages.appendChild(messageEl(m.role, m.content, m.image)));
     els.welcome.hidden = msgs.length > 0;
   }
 
@@ -128,9 +131,27 @@
     if (!mandateDirty) {
       els.mTotal.value = m.total_budget;
       els.mPer.value = m.max_per_order;
+      els.mAuto.value = m.autopay_limit;
       els.mCats.innerHTML = s.categories.map((c) =>
         `<label class="chip"><input type="checkbox" value="${esc(c)}" ${m.allowed_categories.includes(c) ? "checked" : ""}><span>${esc(c)}</span></label>`).join("");
     }
+
+    // saved PayPal wallet for auto-pay
+    const w = s.wallet || {};
+    els.wallet.classList.toggle("on", !!w.connected);
+    els.wallet.innerHTML = w.connected
+      ? `<div class="w-title">⚡ Auto-pay on</div>
+         <div class="w-row"><strong>${esc(w.email || "PayPal wallet")}</strong><button type="button" class="link-btn" id="w-off">Disconnect</button></div>
+         <p style="margin:6px 0 0">Orders up to <b>${money(m.autopay_limit)}</b> pay instantly. Bigger ones ask you.</p>`
+      : `<div class="w-title">Auto-pay</div>
+         <p>Approve PayPal once and the agent can pay small orders for you, inside this mandate.</p>
+         <a class="pp-btn" href="/api/vault/connect?session_id=${sid}">Connect <b>Pay<span>Pal</span></b></a>`;
+    const off = document.getElementById("w-off");
+    if (off) off.onclick = async () => {
+      await api("/api/vault/disconnect", { method: "POST", body: JSON.stringify({ session_id: sid }) });
+      toast("Wallet disconnected. Every payment will ask you.");
+      refresh();
+    };
 
     // cart
     els.cart.innerHTML = s.cart.length
@@ -143,7 +164,7 @@
     els.log.innerHTML = s.log.length ? s.log.map((l) => {
       const fresh = !firstLoad && !seenLog.has(l.id);
       const allow = l.decision === "ALLOWED";
-      const action = { create_order: "PAY", refund: "REFUND", mandate_update: "MANDATE", cancel_order: "CANCEL" }[l.action] || l.action;
+      const action = { create_order: "PAY", auto_pay: "⚡ AUTO-PAY", refund: "REFUND", mandate_update: "MANDATE", cancel_order: "CANCEL", wallet_connect: "WALLET", wallet_disconnect: "WALLET", refund_request: "REFUND REQ", refund_review: "REFUND" }[l.action] || l.action;
       return `<li class="${fresh ? "fresh" : ""}">
         <div class="row"><span>${esc(action)}${l.amount != null ? " · " + money(l.amount) : ""}</span><span class="time">${esc((l.created_at || "").slice(11, 16))}</span></div>
         <div class="why">${esc(l.reason)}</div>
@@ -155,8 +176,26 @@
     // payments
     els.pays.innerHTML = s.payments.length ? s.payments.map((p) =>
       `<li><span class="pid">#${p.id}</span><span class="items">${esc(p.items.map((i) => i.name).join(", "))}</span><span class="amt">${money(p.amount)}</span>
-       <span class="status ${p.status}">${p.status === "CREATED" ? "AWAITING APPROVAL" : p.status}</span></li>`).join("")
+       <span class="status ${p.status} ${p.auto_paid && p.status === "COMPLETED" ? "auto" : ""}">${p.status === "CREATED" ? "AWAITING APPROVAL" : p.status === "REFUND_REQUESTED" ? "REFUND REQUESTED · WITH SELLER" : (p.auto_paid && p.status === "COMPLETED" ? "⚡ AUTO-PAID" : p.status)}</span></li>`).join("")
       : '<li class="empty">No payments yet</li>';
+
+    // seller review queue for refund requests
+    const reqs = s.payments.filter((p) => p.status === "REFUND_REQUESTED");
+    els.sellerWrap.hidden = !reqs.length;
+    els.sellerList.innerHTML = reqs.map((p) => `
+      <li><div class="row"><b>#${p.id} · ${money(p.amount)}</b> <span>${esc(p.items.map((i) => i.name).join(", "))}</span></div>
+        <div class="claim">Buyer says: "${esc(p.refund_reason || "")}"</div>
+        ${p.evidence_path ? `<a href="/api/evidence/${p.id}?session_id=${sid}" target="_blank" rel="noopener" class="evidence"><img src="/api/evidence/${p.id}?session_id=${sid}" alt="Buyer's photo evidence for payment #${p.id}"><span>📷 Photo evidence · click to enlarge</span></a>` : ""}
+        ${p.thread && p.thread.length ? `<ol class="thread">${p.thread.map((m) => `<li class="t-${m.sender}"><b>${m.sender === "seller" ? "🏪 Seller" : "🛒 Buyer"}</b>${esc(m.text)}${m.image ? `<a href="/api/uploads/${encodeURIComponent(m.image)}?session_id=${sid}" target="_blank" rel="noopener"><img src="/api/uploads/${encodeURIComponent(m.image)}?session_id=${sid}" alt="Buyer photo"></a>` : ""}</li>`).join("")}</ol>` : ""}
+        ${p.thread && p.thread.length && p.thread[p.thread.length - 1].sender === "seller" ? `<div class="waiting">⏳ Waiting for the buyer's answer…</div>` : ""}
+        <form class="ask" data-ask="${p.id}"><input name="q" maxlength="500" placeholder="Ask the buyer a question…" aria-label="Question for the buyer" autocomplete="off"><button type="submit">Ask</button></form>
+        <div class="acts"><button class="ok" data-review="${p.id}" data-approve="1">Approve refund</button>
+        <button class="no" data-review="${p.id}" data-approve="0">Reject</button></div></li>`).join("");
+
+    for (const [id, v] of Object.entries(sellerDraft)) {
+      const inp = els.sellerList.querySelector(`form[data-ask="${id}"] input`);
+      if (inp) inp.value = v;
+    }
 
     // pending approvals
     const pending = s.payments.filter((p) => p.status === "CREATED");
@@ -207,9 +246,69 @@
     }
   }
 
+  // ---------- photo attachment (Claude-style preview, then send with optional text) ----------
+  let pendingPhoto = null, pendingUrl = null;
+  function attachPhoto(file) {
+    if (!file || !/^image\/(png|jpe?g|webp)$/.test(file.type)) { toast("Use a JPG, PNG or WebP image"); return; }
+    if (file.size > 8 * 1024 * 1024) { toast("Image is too large (max 8 MB)"); return; }
+    clearPhoto();
+    pendingPhoto = file;
+    pendingUrl = URL.createObjectURL(file);
+    els.attachImg.src = pendingUrl;
+    els.attach.hidden = false;
+    els.photoBtn.classList.add("has-photo");
+    els.input.placeholder = "Add a message about this photo (optional)…";
+    els.input.focus();
+  }
+  function clearPhoto(keepUrl) {
+    if (pendingUrl && !keepUrl) URL.revokeObjectURL(pendingUrl);
+    pendingPhoto = null; pendingUrl = null;
+    els.attach.hidden = true;
+    els.photo.value = "";
+    els.photoBtn.classList.remove("has-photo");
+    els.input.placeholder = "e.g. Get me breakfast stuff under $20…";
+  }
+  els.photo.addEventListener("change", () => attachPhoto(els.photo.files[0]));
+  els.attachX.addEventListener("click", () => clearPhoto());
+  els.input.addEventListener("paste", (e) => {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+    if (item) { e.preventDefault(); attachPhoto(item.getAsFile()); }
+  });
+  els.composer.addEventListener("dragover", (e) => e.preventDefault());
+  els.composer.addEventListener("drop", (e) => {
+    const f = e.dataTransfer?.files?.[0];
+    if (f) { e.preventDefault(); attachPhoto(f); }
+  });
+
+  async function sendPhoto(text) {
+    if (busy) return;
+    busy = true;
+    els.send.disabled = true;
+    els.welcome.hidden = true;
+    const file = pendingPhoto, url = pendingUrl;
+    clearPhoto(true);
+    els.messages.appendChild(messageEl("user", text, null, url));
+    showTyping();
+    const fd = new FormData();
+    fd.append("session_id", sid);
+    fd.append("file", file, file.name || "photo.png");
+    fd.append("message", text);
+    try {
+      const r = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!r.ok) toast("Upload failed: " + (await r.text()).slice(0, 120));
+    } finally {
+      busy = false;
+      els.send.disabled = false;
+      await refresh();
+      URL.revokeObjectURL(url);
+      els.input.focus();
+    }
+  }
+
   els.composer.addEventListener("submit", (e) => {
     e.preventDefault();
     const t = els.input.value;
+    if (pendingPhoto) { els.input.value = ""; sendPhoto(t.trim()); return; }
     els.input.value = "";
     send(t);
   });
@@ -230,6 +329,39 @@
     else send(`Add product ID ${id} to my cart`, `Add ${name} to my cart`);
   });
 
+  // keep a half-typed seller question when the panel re-renders
+  let sellerDraft = {};
+  els.sellerList.addEventListener("input", (e) => {
+    const f = e.target.closest("form[data-ask]");
+    if (f) sellerDraft[f.dataset.ask] = e.target.value;
+  });
+  els.sellerList.addEventListener("submit", async (e) => {
+    const f = e.target.closest("form[data-ask]");
+    if (!f) return;
+    e.preventDefault();
+    const text = f.q.value.trim();
+    if (!text) return;
+    try {
+      await api(`/api/payments/${f.dataset.ask}/seller-message`, { method: "POST", body: JSON.stringify({ session_id: sid, text }) });
+      delete sellerDraft[f.dataset.ask];
+      toast("Question sent to the buyer");
+    } catch (err) { toast(err.message.slice(0, 120)); }
+    refresh();
+  });
+  els.sellerList.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-review]");
+    if (!b) return;
+    const approve = b.dataset.approve === "1";
+    const note = approve ? "" : (prompt("Reason for rejecting (shown to the buyer):", "No proof of damage provided") || "");
+    try {
+      const r = await api(`/api/payments/${b.dataset.review}/refund-review`, {
+        method: "POST", body: JSON.stringify({ session_id: sid, approve, note }),
+      });
+      toast(r.message.replace(/\*\*/g, ""));
+    } catch (err) { toast(err.message.slice(0, 120)); }
+    refresh();
+  });
+
   els.cartCheckout.addEventListener("click", () => send("Check out my whole cart with PayPal", "Check out my cart"));
 
   els.pending.addEventListener("click", async (e) => {
@@ -244,33 +376,13 @@
     refresh();
   });
 
-  els.photo.addEventListener("change", async () => {
-    const f = els.photo.files[0];
-    if (!f || busy) return;
-    busy = true;
-    els.welcome.hidden = true;
-    els.messages.appendChild(messageEl("user", "📷 I uploaded a product photo."));
-    showTyping();
-    const fd = new FormData();
-    fd.append("session_id", sid);
-    fd.append("file", f);
-    try {
-      const r = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!r.ok) toast(await r.text());
-    } finally {
-      busy = false;
-      els.photo.value = "";
-      refresh();
-    }
-  });
-
   els.form.addEventListener("input", () => (mandateDirty = true));
   els.form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const cats = [...els.mCats.querySelectorAll("input:checked")].map((i) => i.value);
     await api("/api/mandate", {
       method: "POST",
-      body: JSON.stringify({ session_id: sid, total_budget: +els.mTotal.value, max_per_order: +els.mPer.value, allowed_categories: cats }),
+      body: JSON.stringify({ session_id: sid, total_budget: +els.mTotal.value, max_per_order: +els.mPer.value, autopay_limit: +els.mAuto.value, allowed_categories: cats }),
     });
     mandateDirty = false;
     toast("Mandate saved. The agent is now bound by it.");
@@ -302,6 +414,7 @@
     }
     await refresh();
     if (params.has("paid")) toast("Back from PayPal: payment captured ✓");
+    if (params.has("vault")) toast("PayPal wallet connected: auto-pay is on ⚡");
     if (location.search) history.replaceState(null, "", "/");
   })().catch((e) => toast("Could not reach the server: " + e.message));
 })();

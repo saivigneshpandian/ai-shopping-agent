@@ -53,16 +53,41 @@ class PayPalClient:
         self._token_exp = time.time() + int(body.get("expires_in", 3000))
         return self._token
 
-    def _request(self, method, path, json_body=None, idempotency_key=None):
+    def _request(self, method, path, json_body=None, idempotency_key=None, extra_headers=None):
         headers = {"Authorization": f"Bearer {self._access_token()}", "Content-Type": "application/json"}
         if idempotency_key:
             headers["PayPal-Request-Id"] = idempotency_key
+        if extra_headers:
+            headers.update(extra_headers)
         r = requests.request(method, f"{self.base}{path}", json=json_body, headers=headers, timeout=30)
         if r.status_code >= 400:
             raise PayPalError(f"PayPal {method} {path} failed ({r.status_code}): {r.text[:500]}")
         return r.json() if r.text else {}
 
     # ---------------- orders ----------------
+
+    @staticmethod
+    def _purchase_unit(items, currency, reference=None):
+        item_total = round(sum(i["price"] * i["quantity"] for i in items), 2)
+        return {
+            "reference_id": reference or uuid.uuid4().hex[:16],
+            "description": "Order placed by AgentPay Guard",
+            "amount": {
+                "currency_code": currency,
+                "value": f"{item_total:.2f}",
+                "breakdown": {"item_total": {"currency_code": currency, "value": f"{item_total:.2f}"}},
+            },
+            "items": [
+                {
+                    "name": i["name"][:127],
+                    "sku": str(i.get("sku", "")),
+                    "quantity": str(i["quantity"]),
+                    "unit_amount": {"currency_code": currency, "value": f"{i['price']:.2f}"},
+                    "category": "PHYSICAL_GOODS",
+                }
+                for i in items
+            ],
+        }
 
     def create_order(self, items, currency="USD", reference=None):
         """items: [{name, price, quantity, sku}]  ->  (order_id, approve_url)"""
@@ -74,31 +99,11 @@ class PayPalClient:
 
         body = {
             "intent": "CAPTURE",
-            "purchase_units": [
-                {
-                    "reference_id": reference or uuid.uuid4().hex[:16],
-                    "description": "Order placed by AI Checkout Agent",
-                    "amount": {
-                        "currency_code": currency,
-                        "value": f"{item_total:.2f}",
-                        "breakdown": {"item_total": {"currency_code": currency, "value": f"{item_total:.2f}"}},
-                    },
-                    "items": [
-                        {
-                            "name": i["name"][:127],
-                            "sku": str(i.get("sku", "")),
-                            "quantity": str(i["quantity"]),
-                            "unit_amount": {"currency_code": currency, "value": f"{i['price']:.2f}"},
-                            "category": "PHYSICAL_GOODS",
-                        }
-                        for i in items
-                    ],
-                }
-            ],
+            "purchase_units": [self._purchase_unit(items, currency, reference)],
             "payment_source": {
                 "paypal": {
                     "experience_context": {
-                        "brand_name": "AI Checkout Agent",
+                        "brand_name": "AgentPay Guard",
                         "user_action": "PAY_NOW",
                         "shipping_preference": "NO_SHIPPING",
                         "return_url": f"{self.app_url}/paypal/return",
@@ -133,6 +138,72 @@ class PayPalClient:
         data = self._request("POST", f"/v2/checkout/orders/{order_id}/capture", {}, idempotency_key=f"cap-{order_id}")
         cap = data["purchase_units"][0]["payments"]["captures"][0]
         return data["status"], cap["id"]
+
+    # ---------------- vault (saved PayPal wallet for auto-pay) ----------------
+
+    def create_vault_setup(self, return_url, cancel_url):
+        """Step 1 of connecting a wallet: buyer approves saving PayPal once. -> (setup_token_id, approve_url)"""
+        if self.is_mock:
+            tid = "MOCKSETUP-" + uuid.uuid4().hex[:10].upper()
+            sep = "&" if "?" in return_url else "?"
+            return tid, f"{return_url}{sep}approval_token_id={tid}"
+        body = {
+            "payment_source": {
+                "paypal": {
+                    "description": "Lets AgentPay Guard pay for you within your spending mandate",
+                    "usage_type": "MERCHANT",
+                    "customer_type": "CONSUMER",
+                    "permit_multiple_payment_tokens": False,
+                    "experience_context": {
+                        "brand_name": "AgentPay Guard",
+                        "shipping_preference": "NO_SHIPPING",
+                        "return_url": return_url,
+                        "cancel_url": cancel_url,
+                    },
+                }
+            }
+        }
+        data = self._request("POST", "/v3/vault/setup-tokens", body, idempotency_key=str(uuid.uuid4()))
+        approve = next((l["href"] for l in data.get("links", []) if l["rel"] in ("approve", "payer-action")), None)
+        return data["id"], approve
+
+    def create_payment_token(self, setup_token_id):
+        """Step 2: turn the approved setup token into a reusable payment token. -> (vault_id, payer_email)"""
+        if self.is_mock:
+            return "MOCKVAULT-" + uuid.uuid4().hex[:10].upper(), "buyer@sandbox.example"
+        body = {"payment_source": {"token": {"id": setup_token_id, "type": "SETUP_TOKEN"}}}
+        data = self._request("POST", "/v3/vault/payment-tokens", body, idempotency_key=f"pt-{setup_token_id}")
+        email = data.get("payment_source", {}).get("paypal", {}).get("email_address", "")
+        return data["id"], email
+
+    def delete_payment_token(self, vault_id):
+        if self.is_mock:
+            return
+        self._request("DELETE", f"/v3/vault/payment-tokens/{vault_id}")
+
+    def charge_vault(self, vault_id, items, currency="USD", reference=None):
+        """Charge a saved wallet with no buyer present. -> (order_id, status, capture_id)"""
+        item_total = round(sum(i["price"] * i["quantity"] for i in items), 2)
+        if self.is_mock:
+            oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
+            cap = "MOCKCAP-" + uuid.uuid4().hex[:10].upper()
+            _MOCK[oid] = {"status": "COMPLETED", "amount": item_total, "capture_id": cap}
+            return oid, "COMPLETED", cap
+        body = {
+            "intent": "CAPTURE",
+            "payment_source": {"paypal": {"vault_id": vault_id}},
+            "purchase_units": [self._purchase_unit(items, currency, reference)],
+        }
+        data = self._request(
+            "POST", "/v2/checkout/orders", body,
+            idempotency_key=str(uuid.uuid4()), extra_headers={"Prefer": "return=representation"},
+        )
+        status = data.get("status")
+        if status != "COMPLETED":  # some accounts need an explicit capture
+            status, cap_id = self.capture_order(data["id"])
+            return data["id"], status, cap_id
+        cap = data["purchase_units"][0]["payments"]["captures"][0]
+        return data["id"], cap.get("status", status), cap["id"]
 
     # ---------------- refunds ----------------
 

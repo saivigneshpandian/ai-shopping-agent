@@ -59,6 +59,26 @@ def init_db():
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Saved PayPal wallet (Vault payment token) that lets the agent auto-pay.
+            CREATE TABLE IF NOT EXISTS wallets (
+                session_id TEXT PRIMARY KEY,
+                vault_id TEXT NOT NULL,
+                payer_email TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            -- Seller <-> buyer conversation about a refund request.
+            CREATE TABLE IF NOT EXISTS refund_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                payment_id INTEGER NOT NULL,
+                sender TEXT NOT NULL,          -- seller | buyer
+                text TEXT NOT NULL,
+                image TEXT,                    -- uploaded file name (buyer photos)
+                agent_seen INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Chat transcript shown in the UI (survives the PayPal redirect).
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +100,16 @@ def init_db():
             );
             """
         )
+        # Migrations for DBs created before auto-pay existed
+        for table, col, ddl in (
+            ("mandates", "autopay_limit", "ALTER TABLE mandates ADD COLUMN autopay_limit REAL NOT NULL DEFAULT 15"),
+            ("payments", "auto_paid", "ALTER TABLE payments ADD COLUMN auto_paid INTEGER NOT NULL DEFAULT 0"),
+            ("payments", "evidence_path", "ALTER TABLE payments ADD COLUMN evidence_path TEXT"),
+            ("chat_messages", "image", "ALTER TABLE chat_messages ADD COLUMN image TEXT"),
+        ):
+            cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
+            if col not in cols:
+                c.execute(ddl)
         # Red-team demo product: its description carries a prompt injection that tries to
         # make the agent overspend. The mandate guardrail must block it no matter what.
         c.execute(
@@ -143,7 +173,7 @@ def cart_clear(session_id):
 
 # ---------------- mandate ----------------
 
-DEFAULT_MANDATE = {"total_budget": 60.0, "max_per_order": 25.0, "allowed_categories": []}
+DEFAULT_MANDATE = {"total_budget": 60.0, "max_per_order": 25.0, "allowed_categories": [], "autopay_limit": 15.0}
 
 
 def get_mandate(session_id):
@@ -155,20 +185,48 @@ def get_mandate(session_id):
         "total_budget": r["total_budget"],
         "max_per_order": r["max_per_order"],
         "allowed_categories": json.loads(r["allowed_categories"]),
+        "autopay_limit": r["autopay_limit"],
     }
 
 
-def set_mandate(session_id, total_budget, max_per_order, allowed_categories):
+def set_mandate(session_id, total_budget, max_per_order, allowed_categories, autopay_limit=None):
+    if autopay_limit is None:
+        autopay_limit = get_mandate(session_id)["autopay_limit"]
     with connect() as c:
         c.execute(
-            """INSERT INTO mandates (session_id, total_budget, max_per_order, allowed_categories)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO mandates (session_id, total_budget, max_per_order, allowed_categories, autopay_limit)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(session_id) DO UPDATE SET total_budget = excluded.total_budget,
                  max_per_order = excluded.max_per_order,
                  allowed_categories = excluded.allowed_categories,
+                 autopay_limit = excluded.autopay_limit,
                  updated_at = datetime('now')""",
-            (session_id, float(total_budget), float(max_per_order), json.dumps(list(allowed_categories))),
+            (session_id, float(total_budget), float(max_per_order), json.dumps(list(allowed_categories)),
+             float(autopay_limit)),
         )
+
+
+# ---------------- wallet (vault) ----------------
+
+def get_wallet(session_id):
+    with connect() as c:
+        r = c.execute("SELECT * FROM wallets WHERE session_id = ?", (session_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def set_wallet(session_id, vault_id, payer_email):
+    with connect() as c:
+        c.execute(
+            """INSERT INTO wallets (session_id, vault_id, payer_email) VALUES (?, ?, ?)
+               ON CONFLICT(session_id) DO UPDATE SET vault_id = excluded.vault_id,
+                 payer_email = excluded.payer_email, created_at = datetime('now')""",
+            (session_id, vault_id, payer_email),
+        )
+
+
+def remove_wallet(session_id):
+    with connect() as c:
+        c.execute("DELETE FROM wallets WHERE session_id = ?", (session_id,))
 
 
 def spent_so_far(session_id):
@@ -176,7 +234,7 @@ def spent_so_far(session_id):
     awaiting approval (so the agent can't open several orders to dodge the cap)."""
     with connect() as c:
         r = c.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE session_id = ? AND status IN ('CREATED', 'COMPLETED')",
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE session_id = ? AND status IN ('CREATED', 'COMPLETED', 'REFUND_REQUESTED')",
             (session_id,),
         ).fetchone()
     return round(r[0], 2)
@@ -184,12 +242,15 @@ def spent_so_far(session_id):
 
 # ---------------- payments ----------------
 
-def payment_create(session_id, paypal_order_id, items, amount, approve_url, currency="USD"):
+def payment_create(session_id, paypal_order_id, items, amount, approve_url, currency="USD",
+                   status="CREATED", capture_id=None, auto_paid=False):
     with connect() as c:
         c.execute(
-            """INSERT INTO payments (session_id, paypal_order_id, items_json, amount, currency, status, approve_url)
-               VALUES (?, ?, ?, ?, ?, 'CREATED', ?)""",
-            (session_id, paypal_order_id, json.dumps(items), amount, currency, approve_url),
+            """INSERT INTO payments (session_id, paypal_order_id, items_json, amount, currency, status,
+                                     approve_url, capture_id, auto_paid)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, paypal_order_id, json.dumps(items), amount, currency, status, approve_url,
+             capture_id, 1 if auto_paid else 0),
         )
 
 
@@ -227,17 +288,53 @@ def _payment_row(r):
     return d
 
 
+# ---------------- refund conversation ----------------
+
+def refund_msg_add(session_id, payment_id, sender, text, image=None):
+    with connect() as c:
+        c.execute(
+            "INSERT INTO refund_messages (session_id, payment_id, sender, text, image, agent_seen) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, payment_id, sender, text, image, 0 if sender == "seller" else 1),
+        )
+
+
+def refund_msgs(session_id):
+    """{payment_id: [messages]} for this session."""
+    with connect() as c:
+        rows = c.execute(
+            "SELECT payment_id, sender, text, image, created_at FROM refund_messages WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["payment_id"], []).append(dict(r))
+    return out
+
+
+def take_unseen_seller_msgs(session_id):
+    """Seller questions the agent hasn't been told about yet (marks them seen)."""
+    with connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT id, payment_id, text FROM refund_messages WHERE session_id = ? AND sender = 'seller' AND agent_seen = 0 ORDER BY id",
+            (session_id,),
+        ).fetchall()]
+        if rows:
+            c.execute("UPDATE refund_messages SET agent_seen = 1 WHERE session_id = ? AND sender = 'seller'", (session_id,))
+    return rows
+
+
 # ---------------- chat ----------------
 
-def chat_add(session_id, role, content):
+def chat_add(session_id, role, content, image=None):
     with connect() as c:
-        c.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, role, content))
+        c.execute("INSERT INTO chat_messages (session_id, role, content, image) VALUES (?, ?, ?, ?)",
+                  (session_id, role, content, image))
 
 
 def chat_history(session_id):
     with connect() as c:
         rows = c.execute(
-            "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id", (session_id,)
+            "SELECT role, content, image FROM chat_messages WHERE session_id = ? ORDER BY id", (session_id,)
         ).fetchall()
     return [dict(r) for r in rows]
 
